@@ -1,0 +1,107 @@
+name: Server image
+
+# Builds the Restock server image for amd64 and arm64 and publishes it to the GitHub Container
+# Registry as ghcr.io/<owner>/restock-server:<version> and :latest. Runs when a release is
+# published, when a v* tag is pushed, or by hand from the Actions tab.
+#
+# The web app comes from the Restock repo at the tag in the Dockerfile (RESTOCK_REF), unless a
+# manual run names another one.
+
+on:
+  release:
+    types: [published]
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      restock_ref:
+        description: 'Restock tag or branch to build the web app from (blank: the one in the Dockerfile)'
+        required: false
+        default: ''
+      latest:
+        description: 'Also tag it :latest'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# A release and its tag both start a run; one build per version is enough.
+concurrency:
+  group: server-image-${{ github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the image name and tags
+        id: meta
+        env:
+          REF: ${{ github.event.release.tag_name || github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          PRERELEASE: ${{ github.event.release.prerelease || false }}
+          WANT_LATEST: ${{ github.event_name != 'workflow_dispatch' || inputs.latest }}
+        run: |
+          set -eu
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/restock-server"
+          pkg_version="$(node -p 'require("./package.json").version')"
+          if [ "$EVENT" = "workflow_dispatch" ] && [[ ! "$REF" =~ ^v[0-9] ]]; then
+            version="$pkg_version"
+          else
+            version="${REF#v}"
+            if [ "$version" != "$pkg_version" ] && [[ "$version" != "$pkg_version"-* ]]; then
+              echo "::error::The tag says $version but package.json says $pkg_version. Bump package.json first."
+              exit 1
+            fi
+          fi
+          tags="${image}:${version}"
+          # :latest only for a full release (not 0.9.3-rc1, not a pre-release).
+          if [ "$WANT_LATEST" = "true" ] && [ "$PRERELEASE" != "true" ] && [[ "$version" != *-* ]]; then
+            tags="${tags},${image}:latest"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "Publishing: $tags"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            WEB=fetch
+            ${{ inputs.restock_ref && format('RESTOCK_REF={0}', inputs.restock_ref) || '' }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=GPL-3.0-only
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

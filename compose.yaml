@@ -1,0 +1,36 @@
+# Restock server, for Docker Compose, Dockge, Portainer (Stacks) or TrueNAS (Apps > Discover > Custom App > Install via YAML).
+# Start it with:  docker compose up -d
+# Then open http://<this computer's address>:8787 and log in with admin / the RESTOCK_PASSWORD below.
+services:
+  restock-server:
+    image: ghcr.io/d-plenty/restock-server:latest
+    # build: .        # to build it yourself instead (see the README)
+    container_name: restock-server
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      # A named volume, so the server (user 1000, not root) can write to it.
+      # On TrueNAS you can use a dataset instead, e.g. /mnt/tank/apps/restock:/data
+      # (give user 1000 write access to it first: sudo chown -R 1000:1000 /mnt/tank/apps/restock).
+      - restock-data:/data
+    environment:
+      # Only used until you set a passphrase. Change it before you start the server: while it's still
+      # "change-me-now" the first login only works from your home network (anyone could guess it).
+      RESTOCK_PASSWORD: "change-me-now"
+      # RESTOCK_USER: "admin"
+      # The address phones use at home. Leave it out to use the address you open the web page with.
+      # RESTOCK_HOME_URL: "http://192.168.1.10:8787"
+      # The address away from home: https://, or a Tailscale 100.x address.
+      # RESTOCK_AWAY_URL: "https://restock.example.com"
+      # Behind Cloudflare Tunnel: "cloudflare". Behind your own https reverse proxy: "true".
+      # If you set it, remove the "ports:" lines above so nothing reaches the server around the proxy.
+      # RESTOCK_TRUST_PROXY: "cloudflare"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  restock-data:

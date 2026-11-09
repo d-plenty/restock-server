@@ -1,0 +1,4 @@
+node_modules/
+data/
+# The web app, built from the Restock repo (npm run build:server-web) or fetched by the Dockerfile
+public/app/

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Set up Restock server</title>
+    <link rel="icon" href="/setup/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/setup/setup.css" />
+  </head>
+  <body>
+    <header class="top"><img src="/setup/icon.svg" alt="" width="32" height="32" /> Restock server</header>
+    <main>
+      <noscript><p class="card">This page needs JavaScript: your passphrase is turned into a key in this browser, not on the server.</p></noscript>
+
+      <form id="login" class="card" autocomplete="on">
+        <h1>Set up your server</h1>
+        <p>Log in with the user name and password from the server's settings (<code>RESTOCK_USER</code> and <code>RESTOCK_PASSWORD</code>). If you didn't set a user name, it's <b>admin</b>.</p>
+        <label for="user">User name</label>
+        <input id="user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="admin" required />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+        <p class="error" id="login-error" role="alert" hidden></p>
+        <button class="btn primary" type="submit">Log in</button>
+      </form>
+
+      <form id="choose" class="card" hidden>
+        <h1>Choose a passphrase</h1>
+        <p>You'll sign in with this from now on, and the setup password stops working. Four or more random words works well, like <i>kettle orbit lemon fence</i>.</p>
+        <p class="muted">It never leaves this browser: the server only gets a key made from it, so it can't read your lists. Keep it somewhere safe. If you lose it, you can reset it and link the web page with a phone again.</p>
+        <input type="text" name="username" id="choose-user" autocomplete="username" hidden />
+        <label for="pass">Passphrase</label>
+        <input id="pass" type="password" autocomplete="new-password" spellcheck="false" required />
+        <div class="meter" aria-hidden="true"><span id="meter-bar"></span></div>
+        <p class="hint" id="meter-text" aria-live="polite">Use at least 20 characters, or four or more words.</p>
+        <label for="pass2">Type it again</label>
+        <input id="pass2" type="password" autocomplete="new-password" spellcheck="false" required />
+        <label class="check"><input type="checkbox" id="show" /> Show passphrase</label>
+        <p class="error" id="choose-error" role="alert" hidden></p>
+        <button class="btn primary" type="submit" id="choose-go">Set passphrase</button>
+      </form>
+
+      <section id="done" class="card" hidden>
+        <h1>All set</h1>
+        <p>Your passphrase is set and the setup password no longer works.</p>
+        <p>Next, sign in with your passphrase, then use <b>Link with a phone</b> so this browser can see your household, and <b>Add a phone</b> for each phone.</p>
+        <a class="btn primary" href="/">Open Restock</a>
+      </section>
+    </main>
+    <script type="module" src="/setup/setup.js"></script>
+  </body>
+</html>

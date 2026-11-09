@@ -1,0 +1,11 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='18 18 72 72'><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1F8352"/><stop offset="1" stop-color="#10512F"/></linearGradient></defs><rect x='18' y='18' width='72' height='72' rx='16' fill='url(#g)'/><g transform="translate(54 54.5) scale(0.8) translate(-54 -53.5)">
+  <!-- handle -->
+  <path d="M38.5,47 C38.5,27.5 69.5,27.5 69.5,47" fill="none" stroke="#F6F1E4" stroke-width="7" stroke-linecap="round"/>
+  <!-- basket body -->
+  <path d="M25.6,45 H82.4 Q86.6,45 85.6,49.1 L78.7,75.4 Q77.7,79.4 73.6,79.4 H34.4 Q30.3,79.4 29.3,75.4 L22.4,49.1 Q21.4,45 25.6,45 Z" fill="#F6F1E4"/>
+  <!-- rim shadow -->
+  <path d="M24.6,52.6 H83.4" stroke="#E2DAC6" stroke-width="2.2"/>
+  <!-- falling price line with arrow -->
+  <path d="M35,58.5 L45.5,68 L54.5,61.2 L68,72.6" fill="none" stroke="#156B42" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M58.6,73.2 H68.6 V63.2" fill="none" stroke="#156B42" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round"/>
+</g></svg>
