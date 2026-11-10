@@ -1,6 +1,7 @@
 # Restock server, for Docker Compose, Dockge, Portainer (Stacks) or TrueNAS (Apps > Discover > Custom App > Install via YAML).
 # Start it with:  docker compose up -d
-# Then open http://<this computer's address>:8787 and log in with admin / the RESTOCK_PASSWORD below.
+# Then open http://<this computer's address>:8787, log in with admin / the RESTOCK_PASSWORD below,
+# choose a passphrase and Set up this server.
 services:
   restock-server:
     image: ghcr.io/d-plenty/restock-server:latest
@@ -10,7 +11,8 @@ services:
     ports:
       - "8787:8787"
     volumes:
-      # A named volume, so the server (user 1000, not root) can write to it.
+      # A named volume, so the server (user 1000, not root) can write to it. Keep it private: the
+      # server can read what phones share with it (put it on an encrypted disk or dataset if you can).
       # On TrueNAS you can use a dataset instead, e.g. /mnt/tank/apps/restock:/data
       # (give user 1000 write access to it first: sudo chown -R 1000:1000 /mnt/tank/apps/restock).
       - restock-data:/data

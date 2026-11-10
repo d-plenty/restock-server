@@ -1,6 +1,8 @@
 // The first-start page: log in with RESTOCK_USER / RESTOCK_PASSWORD, then choose a passphrase.
 // The browser derives PBKDF2-HMAC-SHA256(NFKC(passphrase), salt, 600000, 64 bytes); only the
-// first 32 bytes (the authKey) go to the server. The web app makes the vault when you sign in.
+// first 32 bytes (the authKey) go to the server, once (it keeps scrypt of it, and the key the
+// browser's later sign-ins prove they know). 0.9.4: then, on a new server, Set up this server: its
+// house's name (POST /api/v3/setup, with the session the passphrase gave this page).
 
 import { pbkdf2 } from './pbkdf2.js';
 import { checkPassphrase } from './strength.js';
@@ -84,16 +86,55 @@ $('choose').addEventListener('submit', async (e) => {
       }
       return showError(err, friendly(r));
     }
-    // Start the web app signed out, so it asks for the passphrase and opens the vault itself.
-    await post('/api/v2/logout', {}).catch(() => {});
     $('pass').value = '';
     $('pass2').value = '';
     $('choose').hidden = true;
-    $('done').hidden = false;
+    // 0.9.4: a new server sets up its house next; one that keeps a 0.9.3 household says how to move it.
+    let health = {};
+    try {
+      health = await (await fetch('/api/v3/health', { credentials: 'same-origin' })).json();
+    } catch {
+      health = {};
+    }
+    if (health.core && health.mode === 'new') {
+      $('house').hidden = false;
+      $('house-name').focus();
+      return;
+    }
+    await finish(health);
   } catch {
     showError(err, "Couldn't reach the server. Check it's running and try again.");
   } finally {
     go.disabled = false;
     go.textContent = 'Set passphrase';
+  }
+});
+
+async function finish(health) {
+  // Start the web app signed out, so it signs in with the passphrase itself.
+  await post('/api/v2/logout', {}).catch(() => {});
+  $('done-v3').hidden = !health.core || health.mode === 'v2';
+  $('done-v2').hidden = health.mode !== 'v2';
+  $('done-old').hidden = !!health.core;
+  $('house').hidden = true;
+  $('done').hidden = false;
+}
+
+$('house').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const err = $('house-error');
+  showError(err, '');
+  const name = $('house-name').value.trim();
+  if (!name) return showError(err, 'Give your house a name.');
+  const go = $('house-go');
+  go.disabled = true;
+  try {
+    const r = await post('/api/v3/setup', { name });
+    if (!r.ok) return showError(err, friendly(r));
+    await finish({ core: true, mode: 'v3' });
+  } catch {
+    showError(err, "Couldn't reach the server. Check it's running and try again.");
+  } finally {
+    go.disabled = false;
   }
 });

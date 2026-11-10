@@ -2,8 +2,10 @@
 // What's in it: the web user (salt and scrypt hash of the authKey, never the passphrase), the
 // sealed vault, the web's public key, the phones' public keys, signed-in sessions (hashes of the
 // cookies only), who last wrote each file, and a random secret used for fake login salts.
+// 0.9.4: also the mode, the server's id, the house, the login key (v3 sign-in), v3 browser
+// sessions (with their session keys) and "Keep data for". Household keys are in keys.json.
 
-import { promises as fs, readFileSync, existsSync } from 'node:fs';
+import { promises as fs, readFileSync, existsSync, openSync, writeSync, fsyncSync, closeSync, renameSync, rmSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -25,6 +27,24 @@ export async function atomicWrite(path, data, tmpDir) {
   }
 }
 
+/** The same, synchronously (keys.json, and the handover's steps, whose order must hold through a crash). */
+export function atomicWriteSync(path, data, tmpDir) {
+  const tmp = join(tmpDir, basename(path) + '.' + randomBytes(6).toString('hex') + '.tmp');
+  const fd = openSync(tmp, 'wx', 0o600);
+  try {
+    writeSync(fd, typeof data === 'string' ? Buffer.from(data) : data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(tmp, path);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
 function fresh() {
   return {
     v: 2,
@@ -35,6 +55,11 @@ function fresh() {
     removedDevices: [],
     sessions: {},
     files: {},
+    // 0.9.4 (v3): mode ("new" | "v2" | "v3" | "released"), set on the first start of 0.9.4; the
+    // server's id (srv-<sid>); the house; Keep data for; browser sessions (v3, keyed by the hash of
+    // the session id; each holds its session key).
+    sessions3: {},
+    settings: { keepMonths: 12 },
   };
 }
 
@@ -60,7 +85,8 @@ export function openState(dataDir, tmpDir, log = console.error) {
   data = { ...fresh(), ...data, v: 2 };
   // Keyed by ids that come from outside (device ids, file names): no prototype, so an id like
   // "__proto__" or "constructor" is just a key.
-  for (const k of ['devices', 'sessions', 'files']) data[k] = dict(data[k]);
+  for (const k of ['devices', 'sessions', 'files', 'sessions3']) data[k] = dict(data[k]);
+  if (!data.settings || typeof data.settings !== 'object') data.settings = { keepMonths: 12 };
   if (typeof data.secret !== 'string' || data.secret.length < 32) data.secret = randomBytes(32).toString('base64url');
 
   let chain = Promise.resolve();

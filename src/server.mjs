@@ -1,7 +1,11 @@
-// Restock server (API v2, Restock 0.9.2): a small sync box a household runs itself.
+// Restock server (API v2, Restock 0.9.2; API v3, Restock 0.9.4): a small server a household runs itself.
 //
-// It stores and hands back sealed files. It never has the household key, the server key or
-// anything that opens them (docs/server-protocol.md in the Restock repo is the contract).
+// v2 (a 0.9.3 household, until its owner phone hands it over): it stores and hands back sealed
+// files. It never has the household key, the server key or anything that opens them
+// (docs/server-protocol.md in the Restock repo is the contract).
+// v3 (0.9.4, "server-first"): the server is the household's owner. It holds the keys, opens what
+// phones share, merges it into household.db with the Restock core, and writes a file of its own
+// (src/v3/, docs/server-v3-design.md). Mode: state.mode, "new" | "v2" | "v3" | "released".
 //
 // - Phones: each has its own ECDSA P-256 key. The server keeps the public key and checks a
 //   signature on every request (with replay protection).
@@ -18,8 +22,11 @@ import { createHash, createHmac, randomBytes, timingSafeEqual, createPublicKey, 
 import { promises as fs, readFileSync, existsSync, mkdirSync, appendFileSync, writeFileSync, rmSync, accessSync, realpathSync, constants as fsc } from 'node:fs';
 import { join, extname, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openState, atomicWrite, dict } from './state.mjs';
-import { parseName, canWrite, bodyOk, DEVICE, WEB_ID, FOLDERS } from './names.mjs';
+import { openState, atomicWrite, atomicWriteSync, dict } from './state.mjs';
+import { parseName, parseNameV3, canWrite, bodyOk, reservedDevice, DEVICE, WEB_ID, FOLDERS, FOLDERS_V3 } from './names.mjs';
+import { loadCore } from './v3/core.mjs';
+import { makeV3 } from './v3/api.mjs';
+import { walkNames, sqliteModule } from './v3/merge.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8')).version;
@@ -53,6 +60,19 @@ export const LIMITS = {
   trashDays: 30, // archive/ and photos/ files deleted or replaced by another writer are kept this long
 };
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+/** The http server's limits on slow and idle connections (cfg.timeouts overrides them, for tests). */
+export const TIMEOUTS = {
+  headersMs: 20_000, // a request's headers
+  requestMs: 10 * MIN, // a whole request, body too: 32 MB at about half a megabit a second
+  keepAliveMs: 10_000, // a kept-alive connection waiting for its next request
+  idleMs: 2 * MIN, // nothing moving either way (a client that stopped reading an answer, say)
+  checkMs: 5_000, // how often headersMs and requestMs are checked
+};
+
+/** Node 22.13 or newer has node:sqlite (household.db). Null if this Node can run the server, else why not. */
+export function nodeProblem(proc = process) {
+  return proc.getBuiltinModule?.('node:sqlite') ? null : 'Restock server needs Node 22.13 or newer.';
+}
 
 const yes = (v) => /^(1|true|yes|on)$/i.test(String(v ?? '').trim());
 
@@ -79,6 +99,7 @@ export function config(env = process.env) {
     trustProxy: /^cloudflare$/i.test(tp) ? 'cloudflare' : yes(tp),
     quiet: yes(env.RESTOCK_QUIET),
     now: Date.now,
+    mergeDelayMs: 1000,
   };
 }
 
@@ -237,6 +258,23 @@ export const PAGE_CSP = [
   "form-action 'self'",
   "frame-ancestors 'none'",
 ].join('; ');
+/**
+ * 0.9.4: the web app's page may also show product photos, but only from the shops' own picture
+ * servers (src/stores/* in the Restock repo), never any https: address (a household member could
+ * otherwise plant a "tracking pixel" that reports a browser's address). Adding a shop means adding
+ * its image host here. The web loads them with referrerPolicy="no-referrer".
+ */
+export const IMAGE_HOSTS = [
+  'https://*.woolworths.media', // Woolworths (cdn0.woolworths.media/content/wowproductimages/...)
+  'https://productimages.coles.com.au', // Coles
+  'https://dm.apac.cms.aldi.cx', // Aldi (the product API's assets)
+  'https://media.danmurphys.com.au', // Dan Murphy's
+  'https://edgmedia.bws.com.au', // BWS
+  'https://static.chemistwarehouse.com.au', // Chemist Warehouse
+  'https://cdn.shopify.com', // shops on Shopify (smaller pharmacies and bottle shops)
+  'https://images.openfoodfacts.org', // barcode look-ups (Open Food Facts' image_small_url)
+];
+export const APP_CSP = PAGE_CSP.replace("img-src 'self' data: blob:", `img-src 'self' data: blob: ${IMAGE_HOSTS.join(' ')}`);
 /** For the API: nothing it returns is ever a page. */
 const API_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox";
 
@@ -303,7 +341,13 @@ export async function makeServer(cfg) {
     activity = [];
   }
   let lines = activity.length;
+  let R = null; // the v3 side (makeV3), once built
   function note(what, fields = {}) {
+    // 0.9.4: with household.db open, the activity goes into srv_log (activity.jsonl is v2's).
+    if (R?.engine) {
+      const { by, ...rest } = fields;
+      if (R.merger.logLine('activity', what, by ?? null, Object.keys(rest).length ? rest : null)) return;
+    }
     const a = { at: new Date(now()).toISOString(), what, ...fields };
     activity.push(a);
     if (activity.length > LIMITS.activityKept) activity = activity.slice(-LIMITS.activityKept);
@@ -333,6 +377,7 @@ export async function makeServer(cfg) {
     if (S.account?.webId) S.retiredWebIds.push(S.account.webId);
     S.account = null;
     S.sessions = dict();
+    S.sessions3 = dict();
     rmSync(resetFlag, { force: true });
     wasReset = true;
     note('passphrase-reset');
@@ -463,7 +508,32 @@ export async function makeServer(cfg) {
         if (m) named.push(m[1]);
       }
     }
-    return named.map((x) => x.trim()).filter(Boolean).every(isHomeAddress);
+    return named.map((x) => x.trim()).filter(Boolean).every(isHomeAddress) && homeHost(req);
+  }
+  /**
+   * Was this page opened with an address only a home network has (an IP address, localhost, a
+   * one-word or .local/.lan/.home.arpa/.internal/.ts.net name, or RESTOCK_HOME_URL's or
+   * RESTOCK_AWAY_URL's host)? A web page elsewhere can point its own name at this server
+   * (DNS rebinding): the browser then asks from home, but with that page's name as the Host.
+   */
+  function homeHost(req) {
+    const mine = new Set();
+    for (const u of [cfg.homeUrl, cfg.awayUrl]) {
+      try {
+        if (u) mine.add(new URL(u).hostname.toLowerCase());
+      } catch {
+        /* not an address */
+      }
+    }
+    const hosts = [req.headers.host, ...String(req.headers['x-forwarded-host'] ?? '').split(',')].map((h) => String(h ?? '').trim()).filter(Boolean);
+    if (!hosts.length) return false;
+    return hosts.every((h) => {
+      const m = /^(\[[^\]]+\]|[^:]+)(?::\d+)?$/.exec(h);
+      if (!m) return false;
+      const name = m[1].replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+      if (isIP(name)) return true;
+      return mine.has(name) || name === 'localhost' || !name.includes('.') || /\.(localhost|local|lan|home\.arpa|internal|ts\.net)$/.test(name);
+    });
   }
   function isHttps(req) {
     if (req.socket.encrypted) return true;
@@ -581,6 +651,25 @@ export async function makeServer(cfg) {
     }
     return { ...p, dev };
   }
+  /** A phone's signature, clock and nonce (v2's rules, v3's too). */
+  function verifyPhone(req, f, pub, body) {
+    const sig = unb64(f.s);
+    const key = p256Key(pub);
+    const text = Buffer.from(signedText(req.method, req.url, f.t, f.n, body));
+    let ok = false;
+    if (sig && key) {
+      try {
+        ok = cryptoVerify('sha256', text, { key, dsaEncoding: sig.length === 64 ? 'ieee-p1363' : 'der' }, sig);
+      } catch {
+        ok = false;
+      }
+    }
+    if (!ok) throw new HttpError(401, 'auth', "That request's signature doesn't match this phone.");
+    if (Math.abs(now() - Number(f.t)) > LIMITS.skewMs) throw new HttpError(401, 'clock', "This phone's clock is off; it'll retry with the server's time.");
+    const nk = f.d + ':' + f.n;
+    if (nonces.has(nk)) throw new HttpError(401, 'replay', 'That request was already used.');
+    nonces.set(nk, now());
+  }
   function checkPhone(req, ph, body) {
     const sig = unb64(ph.s);
     const key = p256Key(ph.dev.pub);
@@ -638,8 +727,8 @@ export async function makeServer(cfg) {
       for (const e of ents) {
         const r = rel ? rel + '/' + e.name : e.name;
         if (e.isDirectory()) {
-          if ((depth === 0 && FOLDERS.includes(e.name)) || (depth === 1 && rel === 'archive' && DEVICE.test(e.name))) await dir(r, depth + 1);
-        } else if (e.isFile() && parseName(r)) {
+          if ((depth === 0 && (FOLDERS.includes(e.name) || FOLDERS_V3.includes(e.name))) || (depth === 1 && rel === 'archive' && DEVICE.test(e.name))) await dir(r, depth + 1);
+        } else if (e.isFile() && (parseName(r) || parseNameV3(r))) {
           try {
             const s = await fs.stat(join(FILES, r));
             out.push({ name: r, size: s.size, modified: s.mtime.toISOString(), version: versionOf(s), by: S.files[r]?.by ?? null });
@@ -662,6 +751,13 @@ export async function makeServer(cfg) {
   await walk();
   // Forget who wrote files that are gone.
   for (const k of Object.keys(S.files)) if (!sizes.has(k)) delete S.files[k];
+  // 0.9.4: the mode, on the first start of 0.9.4: a server phones already use keeps their household
+  // as it is (v2) until its owner phone hands it over; an empty one is new.
+  if (!S.mode) {
+    const used = Object.keys(S.devices).length > 0 || [...sizes.keys()].some((n) => parseName(n)?.kind === 'sync');
+    S.mode = used ? 'v2' : 'new';
+    await st.save();
+  }
 
   /**
    * Is this file really in the files folder? Its folder (archive/<device>/ and so on) mustn't be
@@ -729,6 +825,151 @@ export async function makeServer(cfg) {
   await cleanTrash(true);
   const trashTimer = setInterval(() => void cleanTrash().catch((e) => log('trash:', e.message)), 60 * MIN);
   trashTimer.unref();
+
+  // ---- files: reading, writing and deleting one (v2's rules; v3 calls these too) ----
+
+  /** GET/HEAD of a file the caller may read (ETag, 304, streamed). */
+  async function serveFile(req, res, actor, name) {
+    const method = req.method;
+    const file = join(FILES, ...name.split('/'));
+    let fh;
+    try {
+      if (!(await insideFiles(file))) throw new Error('outside');
+      fh = await fs.open(file, fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0));
+      if (!(await fh.stat()).isFile()) {
+        await fh.close();
+        throw new Error('not a file');
+      }
+    } catch {
+      throw new HttpError(404, 'not-found', "That file isn't on the server.");
+    }
+    try {
+      const s = await fh.stat();
+      const etag = `"${versionOf(s)}"`;
+      noteFetch(name, actor.by);
+      const headers = {
+        ...SECURITY,
+        'Content-Security-Policy': API_CSP,
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/octet-stream',
+        'X-Restock-Time': String(now()),
+        'X-Restock-Version': versionOf(s),
+        ETag: etag,
+        ...(res.cookies.length ? { 'Set-Cookie': res.cookies } : {}),
+      };
+      if (String(req.headers['if-none-match'] || '') === etag) {
+        res.writeHead(304, headers);
+        res.end();
+        await fh.close();
+        return;
+      }
+      res.writeHead(200, { ...headers, 'Content-Length': s.size });
+      if (method === 'HEAD') {
+        res.end();
+        await fh.close();
+        return;
+      }
+      const stream = fh.createReadStream();
+      stream.pipe(res);
+      await new Promise((ok) => stream.on('close', ok));
+    } catch (e) {
+      await fh.close().catch(() => {});
+      throw e;
+    }
+  }
+
+  /** DELETE of a file the caller may write: archive/ and photos/ to the trash; photos only by the phone that put them here. */
+  async function deleteFile(actor, name, parsed) {
+    const file = join(FILES, ...name.split('/'));
+    const there = (await insideFiles(file)) && (await fs.lstat(file).catch(() => null))?.isFile();
+    if (!there) throw new HttpError(404, 'not-found', "That file isn't on the server.");
+    // A photo can be shared by phones (the same receipt photo): only the phone that put it here
+    // deletes it. Another phone asking is letting go of its use of it, which is all it needs (so
+    // it's answered 200, as a phone expects), but the file stays for the phone that put it here.
+    if (parsed.kind === 'photo' && S.files[name]?.by !== actor.by) {
+      note('photo-kept', { file: name, by: actor.by });
+      return { deleted: null, kept: name, message: 'Another phone put this photo here, so it stays until that phone deletes it.' };
+    }
+    try {
+      if (parsed.kind === 'archive' || parsed.kind === 'photo') await toTrash(name, file, actor.by, 'deleted');
+      else await fs.unlink(file);
+    } catch {
+      throw new HttpError(404, 'not-found', "That file isn't on the server.");
+    }
+    total -= sizes.get(name) ?? 0;
+    sizes.delete(name);
+    delete S.files[name];
+    st.saveSoon();
+    note('delete', { file: name, by: actor.by });
+    return { deleted: name };
+  }
+
+  /** PUT of a file the caller may write, its body already checked: caps, the trash for replaced archives and photos, atomic. */
+  async function putFile(actor, name, parsed, body) {
+    const file = join(FILES, ...name.split('/'));
+    const old = sizes.get(name) ?? 0;
+    // Someone else's archive or photo replaced by something different: the old one goes to the trash.
+    let trashOld = false;
+    if ((parsed.kind === 'archive' || parsed.kind === 'photo') && sizes.has(name) && S.files[name]?.by !== actor.by) {
+      const was = await fs.readFile(file).catch(() => null);
+      trashOld = !!was && !was.equals(body);
+    }
+    const over = () => total - old + body.length + trashBytes + (trashOld ? old : 0) > maxTotal;
+    if (over()) await cleanTrash(); // anything due out of the trash goes first (at most daily)
+    if (over()) {
+      throw new HttpError(507, 'full', 'The server is full. Free up space or raise RESTOCK_MAX_TOTAL_MB (deleted files stay in the trash for 30 days).');
+    }
+    total += body.length - old; // held while writing, so two uploads can't both squeeze in
+    sizes.set(name, body.length);
+    try {
+      await fs.mkdir(dirname(file), { recursive: true });
+      if (!(await insideFiles(file))) throw new HttpError(409, 'name', "That file's folder on the server isn't a plain folder.");
+      if (trashOld) await toTrash(name, file, actor.by, 'replaced by ' + actor.by);
+      await atomicWrite(file, body, TMP);
+    } catch (e) {
+      total -= body.length - old;
+      if (old) sizes.set(name, old);
+      else sizes.delete(name);
+      throw e;
+    }
+    const s = await fs.stat(file);
+    S.files[name] = { by: actor.by };
+    st.saveSoon();
+    note('upload', { file: name, by: actor.by, size: body.length });
+    return { name, size: s.size, modified: s.mtime.toISOString(), version: versionOf(s), by: actor.by };
+  }
+
+  /** A file the server writes itself (its own sync file, keys/<device>.bin): synchronous, atomic, counted. */
+  function writeServerFile(name, bytes) {
+    const file = join(FILES, ...name.split('/'));
+    mkdirSync(dirname(file), { recursive: true });
+    const old = sizes.get(name) ?? 0;
+    atomicWriteSync(file, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), TMP);
+    total += bytes.byteLength - old;
+    sizes.set(name, bytes.byteLength);
+    S.files[name] = { by: 'srv-' + S.sid };
+    st.saveSoon();
+  }
+  function deleteServerFile(name) {
+    const file = join(FILES, ...name.split('/'));
+    rmSync(file, { force: true });
+    total -= sizes.get(name) ?? 0;
+    sizes.delete(name);
+    delete S.files[name];
+  }
+  /** Moves a file to the trash (Keep data for, starting afresh). False if it wasn't there. */
+  async function trashFile(name, by, why) {
+    const file = join(FILES, ...name.split('/'));
+    if (!(await insideFiles(file))) return false;
+    const moved = await toTrash(name, file, by, why).catch(() => false);
+    if (moved) {
+      total -= sizes.get(name) ?? 0;
+      sizes.delete(name);
+      delete S.files[name];
+      st.saveSoon();
+    }
+    return moved;
+  }
 
   // ---- handlers ----
 
@@ -812,7 +1053,33 @@ export async function makeServer(cfg) {
 
     if (path === '/api/v2/health' && (method === 'GET' || method === 'HEAD')) return send(req, res, 200, { ok: true, app: 'restock-server', version: VERSION, api: 2 });
     if (path.startsWith('/api/v1/')) throw new HttpError(410, 'gone', 'This server speaks API v2. Update Restock on this phone to 0.9.2 or newer.');
+    if (path.startsWith('/api/v3/')) {
+      if (!R) throw new HttpError(503, 'core', "This copy of the server was built without the Restock core. Rebuild it (see the README).");
+      return R.v3.api(req, res, ip, url);
+    }
     if (!path.startsWith('/api/v2/')) throw new HttpError(404, 'not-found', 'Not found.');
+
+    // 0.9.4: once the household lives on the server (v3), phones on v2 are told to update (a
+    // 0.9.4 phone then upgrades with its v2 key); a 0.9.3 browser tab still open keeps its session
+    // for files; nothing else of v2 is served (no new v2 sign-ins, codes, links or vaults).
+    if (S.mode === 'v3' || S.mode === 'released') {
+      if (/^Restock2\s/.test(String(req.headers.authorization || ''))) {
+        const d = /\bd=([A-Za-z0-9_-]{1,64})/.exec(String(req.headers.authorization))?.[1];
+        const dev = d ? S.devices[d] : null;
+        if (!dev || (dev.status && dev.status !== 'active')) throw new HttpError(401, 'removed', 'This phone was removed from the server. Add it again from the web page.');
+        throw new HttpError(403, 'update', 'Update Restock to keep syncing with your server.', { api: 3 });
+      }
+      const open =
+        (path === '/api/v2/login/salt' && method === 'GET') ||
+        (path === '/api/v2/login' && method === 'POST' && !S.account) ||
+        path === '/api/v2/logout' ||
+        (path === '/api/v2/passphrase' && method === 'POST' && !S.account) ||
+        path === '/api/v2/files' ||
+        path.startsWith('/api/v2/files/') ||
+        (path === '/api/v2/web' && method === 'GET') ||
+        (path === '/api/v2/vault' && method === 'GET');
+      if (!open) throw new HttpError(409, 'v3', 'The server has moved on to the new Restock web app. Reload this page.', { api: 3 });
+    }
 
     // Who's asking. A phone's header is checked before its body is read; the signature after.
     const isFilePut = method === 'PUT' && path.startsWith('/api/v2/files/');
@@ -855,7 +1122,7 @@ export async function makeServer(cfg) {
         // The first-start login, only while no passphrase has been set, and with the default
         // password only from the home network.
         if (!S.account && isKnownPassword(cfg.password) && !fromHome(req)) {
-          note('setup-login-refused', { ip: mask(ip), why: 'default password, not from home' });
+          note('setup-login-refused', { ip: mask(ip), why: homeHost(req) ? 'default password, not from home' : 'default password, opened with an address that is not a home one' });
           throw new HttpError(403, 'setup-remote', 'Finish setting up Restock server from your home network first (or start it with your own RESTOCK_PASSWORD).');
         }
         const okUser = same(user, cfg.user);
@@ -886,6 +1153,8 @@ export async function makeServer(cfg) {
       }
       fails.delete(limitKey(ip));
       if (actor.type === 'web') delete S.sessions[actor.hash];
+      // 0.9.4: the v3 sign-in's key, learned from the first v2 sign-in after the update.
+      if (R && !a.loginKey) a.loginKey = b64u(R.core.loginKeyOf(auth));
       newSession(req, res, 'passphrase', { ip: mask(ip) });
       await st.save();
       note('login', { ip: mask(ip) });
@@ -946,7 +1215,10 @@ export async function makeServer(cfg) {
         webPub: pair?.webPub ?? null,
         setAt: S.account?.setAt ?? new Date(now()).toISOString(),
         changedAt: new Date(now()).toISOString(),
+        // 0.9.4: what a v3 sign-in proves it knows (HKDF of the authKey); the passphrase never crosses.
+        ...(R ? { loginKey: b64u(R.core.loginKeyOf(auth)) } : {}),
       };
+      S.sessions3 = dict();
       // Everyone else is signed out; this browser carries on, now with the passphrase, under a new
       // session cookie (whoever saw the setup one gets nothing from it).
       S.sessions = dict();
@@ -1048,7 +1320,8 @@ export async function makeServer(cfg) {
         if (inv.used) throw new HttpError(410, 'used', 'That code was already used. Make a new one for each phone.');
         if (inv.expires < now()) throw new HttpError(410, 'expired', 'That code has expired. Make a new one on the web page.');
         const device = String(b.device ?? '');
-        if (!DEVICE.test(device) || device.startsWith('web-')) throw new HttpError(400, 'device', "That device id won't work.");
+        // 0.9.4: nor srv- or keys- (the server's own file, and v3's keys/ names), as on v3.
+        if (!DEVICE.test(device) || reservedDevice(device)) throw new HttpError(400, 'device', "That device id won't work.");
         if (!p256Key(b.pub)) throw new HttpError(400, 'pub', "The phone's key isn't a P-256 public key.");
         const name = cleanName(b.name) || 'Phone';
         const again = !!S.devices[device];
@@ -1060,6 +1333,7 @@ export async function makeServer(cfg) {
         if (!again && Object.keys(S.devices).length >= LIMITS.maxDevices) throw new HttpError(507, 'full', 'This server has as many phones as it takes.');
         inv.used = true;
         S.devices[device] = { name, pub: b.pub, added: again ? S.devices[device].added : now(), lastSeen: now() };
+        if (S.mode === 'new') S.mode = 'v2';
         S.removedDevices = S.removedDevices.filter((d) => d !== device);
         await st.save();
         note(again ? 'phone-rejoined' : 'phone-added', { by: device, name });
@@ -1140,7 +1414,7 @@ export async function makeServer(cfg) {
     // ---- files ----
     if (path === '/api/v2/files' && method === 'GET') {
       need(actor, 'phone-or-session');
-      return send(req, res, 200, { files: await walk() });
+      return send(req, res, 200, { files: (await walk()).filter((f) => parseName(f.name)) });
     }
     m = /^\/api\/v2\/files\/(.+)$/.exec(path);
     if (m) {
@@ -1153,112 +1427,21 @@ export async function makeServer(cfg) {
       }
       const parsed = parseName(name);
       if (!parsed) throw new HttpError(400, 'name', "That isn't a Restock file name.");
-      const file = join(FILES, ...name.split('/'));
-      if (method === 'GET' || method === 'HEAD') {
-        let fh;
-        try {
-          if (!(await insideFiles(file))) throw new Error('outside');
-          fh = await fs.open(file, fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0));
-          if (!(await fh.stat()).isFile()) {
-            await fh.close();
-            throw new Error('not a file');
-          }
-        } catch {
-          throw new HttpError(404, 'not-found', "That file isn't on the server.");
-        }
-        try {
-          const s = await fh.stat();
-          const etag = `"${versionOf(s)}"`;
-          noteFetch(name, actor.by);
-          const headers = {
-            ...SECURITY,
-            'Content-Security-Policy': API_CSP,
-            'Cache-Control': 'no-store',
-            'Content-Type': 'application/octet-stream',
-            'X-Restock-Time': String(now()),
-            'X-Restock-Version': versionOf(s),
-            ETag: etag,
-            ...(res.cookies.length ? { 'Set-Cookie': res.cookies } : {}),
-          };
-          if (String(req.headers['if-none-match'] || '') === etag) {
-            res.writeHead(304, headers);
-            res.end();
-            await fh.close();
-            return;
-          }
-          res.writeHead(200, { ...headers, 'Content-Length': s.size });
-          if (method === 'HEAD') {
-            res.end();
-            await fh.close();
-            return;
-          }
-          const stream = fh.createReadStream();
-          stream.pipe(res);
-          await new Promise((ok) => stream.on('close', ok));
-        } catch (e) {
-          await fh.close().catch(() => {});
-          throw e;
-        }
-        return;
-      }
+      if (method === 'GET' || method === 'HEAD') return serveFile(req, res, actor, name);
       if (method === 'PUT' || method === 'DELETE') {
         if (!canWrite(actor, parsed)) {
           throw new HttpError(403, 'forbidden', actor.type === 'web' ? 'The web page can only write its own file.' : 'A phone can only write its own files.');
         }
-        if (method === 'DELETE') {
-          const there = (await insideFiles(file)) && (await fs.lstat(file).catch(() => null))?.isFile();
-          if (!there) throw new HttpError(404, 'not-found', "That file isn't on the server.");
-          // A photo can be shared by phones (the same receipt photo): only the phone that put it here
-          // deletes it. Another phone asking is letting go of its use of it, which is all it needs (so
-          // it's answered 200, as a phone expects), but the file stays for the phone that put it here.
-          if (parsed.kind === 'photo' && S.files[name]?.by !== actor.by) {
-            note('photo-kept', { file: name, by: actor.by });
-            return send(req, res, 200, { deleted: null, kept: name, message: 'Another phone put this photo here, so it stays until that phone deletes it.' });
-          }
-          try {
-            if (parsed.kind === 'archive' || parsed.kind === 'photo') await toTrash(name, file, actor.by, 'deleted');
-            else await fs.unlink(file);
-          } catch {
-            throw new HttpError(404, 'not-found', "That file isn't on the server.");
-          }
-          total -= sizes.get(name) ?? 0;
-          sizes.delete(name);
-          delete S.files[name];
-          st.saveSoon();
-          note('delete', { file: name, by: actor.by });
-          return send(req, res, 200, { deleted: name });
-        }
+        if (method === 'DELETE') return send(req, res, 200, await deleteFile(actor, name, parsed));
         if (!bodyOk(parsed, body)) throw new HttpError(400, 'sealed', parsed.kind === 'keys' ? "That isn't a JSON keys file." : "That isn't a sealed Restock file.");
-        const old = sizes.get(name) ?? 0;
-        // Someone else's archive or photo replaced by something different: the old one goes to the trash.
-        let trashOld = false;
-        if ((parsed.kind === 'archive' || parsed.kind === 'photo') && sizes.has(name) && S.files[name]?.by !== actor.by) {
-          const was = await fs.readFile(file).catch(() => null);
-          trashOld = !!was && !was.equals(body);
+        const out = await putFile(actor, name, parsed, body);
+        if (S.mode === 'new') {
+          S.mode = 'v2';
+          st.saveSoon();
         }
-        const over = () => total - old + body.length + trashBytes + (trashOld ? old : 0) > maxTotal;
-        if (over()) await cleanTrash(); // anything due out of the trash goes first (at most daily)
-        if (over()) {
-          throw new HttpError(507, 'full', 'The server is full. Free up space or raise RESTOCK_MAX_TOTAL_MB (deleted files stay in the trash for 30 days).');
-        }
-        total += body.length - old; // held while writing, so two uploads can't both squeeze in
-        sizes.set(name, body.length);
-        try {
-          await fs.mkdir(dirname(file), { recursive: true });
-          if (!(await insideFiles(file))) throw new HttpError(409, 'name', "That file's folder on the server isn't a plain folder.");
-          if (trashOld) await toTrash(name, file, actor.by, 'replaced by ' + actor.by);
-          await atomicWrite(file, body, TMP);
-        } catch (e) {
-          total -= body.length - old;
-          if (old) sizes.set(name, old);
-          else sizes.delete(name);
-          throw e;
-        }
-        const s = await fs.stat(file);
-        S.files[name] = { by: actor.by };
-        st.saveSoon();
-        note('upload', { file: name, by: actor.by, size: body.length });
-        return send(req, res, 200, { name, size: s.size, modified: s.mtime.toISOString(), version: versionOf(s), by: actor.by });
+        // 0.9.4: a 0.9.3 browser's tab still open after the handover: its file is merged like any other.
+        if (S.mode === 'v3' && parsed.kind === 'sync') R?.merger.queue(name);
+        return send(req, res, 200, out);
       }
       throw new HttpError(405, 'method', 'Not allowed.');
     }
@@ -1309,7 +1492,7 @@ export async function makeServer(cfg) {
       file = join(root, 'index.html');
       s = await fs.stat(file).catch(() => null);
       if (!s?.isFile()) {
-        const h = { 'Content-Security-Policy': PAGE_CSP, 'Cache-Control': 'no-store' };
+        const h = { 'Content-Security-Policy': APP_CSP, 'Cache-Control': 'no-store' };
         return send(req, res, 503, NOT_BUILT, 'text/html; charset=utf-8', h);
       }
     }
@@ -1317,7 +1500,7 @@ export async function makeServer(cfg) {
     const immutable = spa && /^assets\//.test(name);
     res.writeHead(200, {
       ...SECURITY,
-      'Content-Security-Policy': PAGE_CSP,
+      'Content-Security-Policy': spa ? APP_CSP : PAGE_CSP,
       'Content-Type': TYPES[ext] || 'application/octet-stream',
       'Content-Length': s.size,
       'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
@@ -1361,24 +1544,135 @@ export async function makeServer(cfg) {
     }
   }
 
-  const server = createServer((req, res) => {
-    handle(req, res).catch((e) => {
-      log(e?.stack || String(e));
-      if (!res.headersSent) sendError(req, res, new HttpError(500, 'server', 'Something went wrong on the server.'));
-      else res.destroy();
-    });
-  });
-  server.requestTimeout = 15 * 60_000; // a 32 MB upload over a slow mobile connection takes a while
-  server.headersTimeout = 20_000;
+  // ---- 0.9.4: the v3 side (src/v3/), with the helpers it shares with v2 ----
+  const core = await loadCore();
+  if ((S.mode === 'v3' || S.mode === 'released') && !core) {
+    throw new Error("this server keeps its household itself (v3), but the Restock core (core/restock-core.mjs) isn't in this copy. Rebuild it (see the README).");
+  }
+  if ((S.mode === 'v3' || S.mode === 'released') && !sqliteModule()) throw new Error(nodeProblem());
+  if (core) {
+    const v2Session = (req, res) => {
+      const a = webActor(req, res);
+      if (!a || a.type !== 'web') return a;
+      // As v2's checks for a session's POST: not from another site, and only JSON.
+      const site = String(req.headers['sec-fetch-site'] || '');
+      if (site === 'cross-site' || site === 'same-site') throw new HttpError(403, 'forbidden', 'Not from another site.');
+      if (req.method === 'POST' && !/^application\/json(\s*;|$)/i.test(String(req.headers['content-type'] || ''))) throw new HttpError(415, 'forbidden', 'Send JSON (Content-Type: application/json).');
+      return a;
+    };
+    R = {
+      core,
+      sqlite: sqliteModule(),
+      cfg,
+      S,
+      st,
+      now,
+      log,
+      note,
+      HttpError,
+      DATA,
+      FILES,
+      TMP,
+      LIMITS,
+      VERSION,
+      maxFile,
+      send,
+      readBody,
+      json,
+      walk,
+      serveFile,
+      putFile,
+      deleteFile,
+      writeServerFile,
+      deleteServerFile,
+      trashFile,
+      listFileNames: () => [...sizes.keys()],
+      hasFile: (name) => sizes.has(name),
+      verifyPhone,
+      nonces,
+      forgetNonces: (device) => {
+        for (const k of nonces.keys()) if (k.startsWith(device + ':')) nonces.delete(k);
+      },
+      failed,
+      clearFails: (ip) => fails.delete(limitKey(ip)),
+      checkLock,
+      scryptUse,
+      qrMade,
+      limitKey,
+      mask,
+      p256Key,
+      sameKey,
+      same,
+      sha256,
+      isHomeAddress,
+      cleanName,
+      origin,
+      v2Session,
+      endV2Sessions: () => {
+        S.sessions = dict();
+        relays.clear();
+      },
+      // A 0.9.3 browser signed in with this phone (v2's cookie session) goes with it.
+      endV2PhoneSessions: signOutPhoneSessions,
+      async setPassphrase(salt, auth) {
+        const sSalt = randomBytes(16);
+        const hash = await scryptAsync(auth, sSalt);
+        S.account = {
+          ...S.account,
+          salt,
+          scrypt: { alg: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, salt: b64u(sSalt), hash: b64u(hash) },
+          loginKey: b64u(core.loginKeyOf(auth)),
+          changedAt: new Date(now()).toISOString(),
+        };
+      },
+      sendStream(req, res, stream, headers) {
+        res.writeHead(200, { ...SECURITY, 'Content-Security-Policy': API_CSP, 'Cache-Control': 'no-store', 'X-Restock-Time': String(now()), ...headers });
+        return new Promise((ok) => {
+          stream.on('error', (e) => {
+            log('stream:', e.message);
+            res.destroy();
+            ok();
+          });
+          res.on('close', ok);
+          stream.pipe(res);
+        });
+      },
+    };
+    R.v3 = await makeV3(R);
+  }
+
+  // Slow and idle connections (0.9.4 review). No endpoint holds an answer back (Sign in with a phone
+  // and link codes are polled, each poll answered at once), so these only ever cut a client that
+  // stopped sending. A request's headers must arrive within headersTimeout and all of it (a 32 MB
+  // upload over a slow mobile connection) within requestTimeout; a kept-alive connection with nothing
+  // asked goes after keepAliveTimeout, and one where nothing at all moves either way (an answer too)
+  // after idleTimeout. The checks run every connectionsCheckingInterval.
+  const T = { ...TIMEOUTS, ...(cfg.timeouts ?? {}) };
+  const server = createServer(
+    { headersTimeout: T.headersMs, requestTimeout: T.requestMs, keepAliveTimeout: T.keepAliveMs, connectionsCheckingInterval: T.checkMs },
+    (req, res) => {
+      handle(req, res).catch((e) => {
+        log(e?.stack || String(e));
+        if (!res.headersSent) sendError(req, res, new HttpError(500, 'server', 'Something went wrong on the server.'));
+        else res.destroy();
+      });
+    },
+  );
+  server.headersTimeout = T.headersMs;
+  server.requestTimeout = T.requestMs;
+  server.keepAliveTimeout = T.keepAliveMs;
+  server.timeout = T.idleMs;
   server.on('close', () => {
     clearInterval(pruner);
     clearInterval(trashTimer);
+    R?.v3.close();
   });
 
   return {
     server,
     flush: () => st.flush(),
     state: S,
+    v3: R,
     wasReset,
     dataDir: DATA,
     appBuilt: () => existsSync(join(APP, 'index.html')),
@@ -1387,6 +1681,13 @@ export async function makeServer(cfg) {
 
 // Run directly: start listening.
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  // What the server writes is for its own user only (household.db can be read: it isn't sealed).
+  process.umask(0o077);
+  const problem = nodeProblem();
+  if (problem) {
+    console.error(problem + ` This is Node ${process.versions.node}.`);
+    process.exit(1);
+  }
   const cfg = config();
   try {
     mkdirSync(cfg.dataDir, { recursive: true });
@@ -1419,6 +1720,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
       console.log(`  Open ${url} (or this computer's address) and sign in with your passphrase.`);
     }
     if (!s.appBuilt()) console.log('  Note: the web app is not built into this copy (public/app/ is missing). Phones can still sync.');
+    if (!s.v3) console.log('  Note: the Restock core is not in this copy (core/ is missing), so it can only keep a 0.9.3 household.');
+    else if (s.state.mode === 'v2') console.log('  This server keeps a 0.9.3 household. Hand it to the server from the owner phone (Restock 0.9.4).');
+    else if (s.state.mode === 'new' && s.state.account) console.log('  Next: open the web page and Set up this server.');
     console.log('');
   });
   const stop = () => {

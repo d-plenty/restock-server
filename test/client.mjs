@@ -158,3 +158,174 @@ export class Phone {
     return this.req('GET', path);
   }
 }
+
+// ---------- 0.9.4, protocol v3: a phone and a browser as docs/server-protocol.md "v3" says ----------
+// They use the Restock core (core/restock-core.mjs) for the v3 crypto, as the web app does.
+
+export const core = await import('../core/restock-core.mjs');
+const u8 = (s) => core.unb64(s);
+const SEALED = 'application/x-restock-sealed';
+
+/** Reads a restock-server:3 / restock-handover:3 / restock-login:3 code's fields. */
+export function codeFields(code) {
+  return Object.fromEntries(new URLSearchParams(String(code).replace(/^[a-z-]+:3\?/, '')));
+}
+
+/** A 0.9.4 phone: its request-signing key (v2's), its kex key, its household signing key (my_priv). */
+export class V3Phone extends Phone {
+  constructor(base, o = {}) {
+    super(base, o);
+    this.kex = core.newEcdhKey();
+    this.my = core.newJavaKeyPair();
+    this.serverKeys = {};
+    this.keys = this.keys; // the request-signing key pair (Phone)
+    this.householdKeys = {};
+    this.keyv = 0;
+  }
+  async post(path, json) {
+    return this.req('POST', path, { json });
+  }
+  joinBody(invite, n = b64u(randomBytes(16))) {
+    return { invite, device: this.device, name: this.name, pub: this.keys.pub, kex: b64u(this.kex.pub), myPub: this.my.pub, n };
+  }
+  /** Takes a join or upgrade answer in. */
+  takeGift(serverKex, n, sealed) {
+    const key = core.joinKey(this.kex.priv, u8(serverKex), u8(n));
+    const g = core.openJoin(key, this.device, u8(sealed));
+    this.gift = g;
+    this.serverKeys = { ...this.serverKeys, ...g.serverKeys };
+    this.householdKeys = { ...this.householdKeys, ...g.keys };
+    this.keyv = g.keyv;
+    this.serverKex = serverKex;
+    return g;
+  }
+  async join(code, extra = {}) {
+    const f = codeFields(code);
+    const n = b64u(randomBytes(16));
+    const r = await fetch(this.base + '/api/v3/join', { method: 'POST', headers: { ...this.headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...this.joinBody(f.i, n), ...extra }) });
+    const body = await asJson(r);
+    if (r.status === 200) this.takeGift(f.k, n, body.sealed);
+    return { status: r.status, body };
+  }
+  async memberJoin(serverKex, { sigBy = this.my.priv } = {}) {
+    const n = b64u(randomBytes(16));
+    const b = { member: true, device: this.device, pub: this.keys.pub, kex: b64u(this.kex.pub), n };
+    b.sig = core.signWithPkcs8(sigBy, core.memberJoinText(b));
+    const r = await fetch(this.base + '/api/v3/join', { method: 'POST', headers: { ...this.headers, 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+    const body = await asJson(r);
+    if (r.status === 200) this.takeGift(serverKex, n, body.sealed);
+    return { status: r.status, body };
+  }
+  async upgrade(serverKex, ha) {
+    const n = b64u(randomBytes(16));
+    const b = { kex: b64u(this.kex.pub), myPub: this.my.pub, n };
+    if (ha) b.ha = b64u(core.sealHa(core.haKey(this.kex.priv, u8(serverKex), u8(n)), this.device, ha));
+    const r = await this.req('POST', '/api/v3/upgrade', { json: b });
+    if (r.status === 200) this.takeGift(serverKex, n, r.body.sealed);
+    return r;
+  }
+  /** Its own sync file (folder-sync format, plus shares), sealed with the newest serverKey. */
+  file(entries, more = {}) {
+    return { format: 'restock-sync', v: 1, device: this.device, name: this.name, keyv: this.keyv, at: new Date().toISOString(), top: entries.length, seen: {}, entries, ...more };
+  }
+  sealFor(msg, keyv = this.keyv) {
+    return Buffer.from(core.sealRsf1(u8(this.serverKeys[String(keyv)]), msg));
+  }
+  putOwn(msg) {
+    return this.req('PUT', `/api/v3/files/restock-sync-${this.device}.bin`, { body: this.sealFor(msg) });
+  }
+  async getFile(name) {
+    return this.req('GET', '/api/v3/files/' + name);
+  }
+  /** The server's own file, opened (null if it isn't there). */
+  async serverFile(sid) {
+    const r = await this.getFile(`restock-sync-srv-${sid}.bin`);
+    if (r.status !== 200) return null;
+    return core.openWithAny(this.serverKeys, r.body).msg;
+  }
+  /** keys/<device>.bin after a rekey: takes a higher keyv. */
+  async takeKeysFile() {
+    const r = await this.getFile(`keys/${this.device}.bin`);
+    if (r.status !== 200) return r;
+    const k = core.openKeysFile(core.keysFileKey(this.kex.priv, u8(this.serverKex)), this.device, r.body);
+    if (k.keyv > this.keyv) {
+      this.keyv = k.keyv;
+      this.householdKeys = { ...this.householdKeys, ...k.keys };
+      for (const [v, key] of Object.entries(k.keys)) this.serverKeys[v] = b64u(core.serverKeyOf(u8(key)));
+    }
+    return { status: 200, keys: k };
+  }
+}
+
+/** A browser on v3: challenge sign-in, a session key, MACed requests, sealed answers. */
+export class V3Browser {
+  constructor(base, { ip, headers = {} } = {}) {
+    this.base = base;
+    this.headers = { ...(ip ? { 'X-Forwarded-For': ip } : {}), ...headers };
+  }
+  async login(user, passphrase, iterations = 600000, { tamper } = {}) {
+    const ch = await (await fetch(`${this.base}/api/v3/login/challenge?user=${encodeURIComponent(user)}`, { headers: this.headers })).json();
+    const { auth } = derive(passphrase, ch.salt, iterations);
+    const loginKey = core.loginKeyOf(u8(auth));
+    const e = core.newEcdhKey();
+    const epub = b64u(e.pub);
+    const body = { user, c: ch.c, epub, proof: core.loginProof(loginKey, ch.c, epub) };
+    if (tamper) tamper(body);
+    const r = await fetch(this.base + '/api/v3/login', { method: 'POST', headers: { ...this.headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await asJson(r);
+    if (r.status !== 200) return { status: r.status, body: out };
+    this.loginKey = loginKey;
+    this.session = out.session;
+    this.key = core.sessionKeyOf(e.priv, u8(ch.kex), u8(ch.c), loginKey);
+    this.kex = ch.kex;
+    this.gift = core.openRsf1(this.key, u8(out.sealed));
+    return { status: 200, body: out, gift: this.gift };
+  }
+  /** A request: `json` (plain), `sealed` (RSF1 with the session key) or raw `body`. */
+  async raw(method, path, { json, sealed, body, headers = {}, auth } = {}) {
+    const h = { ...this.headers, ...headers };
+    if (json !== undefined) {
+      body = Buffer.from(JSON.stringify(json));
+      h['Content-Type'] = 'application/json';
+    } else if (sealed !== undefined) {
+      body = Buffer.from(core.sealRsf1(this.key, sealed));
+      h['Content-Type'] = SEALED;
+    }
+    const wire = new URL(this.base + path);
+    if (this.session) h.Authorization = auth ?? core.webAuthorization(this.session, this.key, method, wire.pathname + wire.search, body ?? new Uint8Array(0));
+    return fetch(this.base + path, { method, headers: h, body });
+  }
+  async req(method, path, opts) {
+    const r = await this.raw(method, path, opts);
+    const type = r.headers.get('content-type') || '';
+    const bytes = Buffer.from(await r.arrayBuffer());
+    let out;
+    if (type.startsWith(SEALED)) out = core.openRsf1(this.key, bytes);
+    else if (type.startsWith('application/json')) out = bytes.length ? JSON.parse(bytes.toString('utf8')) : {};
+    else out = bytes;
+    return { status: r.status, headers: r.headers, body: out, sealed: type.startsWith(SEALED) };
+  }
+  get(path) {
+    return this.req('GET', path);
+  }
+  post(path, json = {}) {
+    return this.req('POST', path, { json });
+  }
+  put(path, json) {
+    return this.req('PUT', path, { json });
+  }
+  /**
+   * 0.9.4: the passphrase again, for the dangerous admin actions: `{ c, proof }` over a fresh
+   * challenge, bound to this session (a wrong `loginKey` makes a wrong proof).
+   */
+  async confirm(loginKey = this.loginKey) {
+    const ch = await (await fetch(`${this.base}/api/v3/login/challenge?user=admin`, { headers: this.headers })).json();
+    return { c: ch.c, proof: core.loginProof(loginKey, ch.c, this.session) };
+  }
+  async recovery() {
+    return this.post('/api/v3/recovery', { confirm: await this.confirm() });
+  }
+  async removePhone(device) {
+    return this.req('DELETE', '/api/v3/phones/' + device, { json: { confirm: await this.confirm() } });
+  }
+}

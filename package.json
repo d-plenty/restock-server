@@ -1,8 +1,8 @@
 {
   "name": "restock-server",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "private": true,
-  "description": "Restock server: a self-hosted, end-to-end encrypted sync box and web app host for a Restock household.",
+  "description": "Restock server: a self-hosted server for a Restock household. It keeps the household, merges what phones share, runs Home Assistant and serves the web app.",
   "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
@@ -11,11 +11,12 @@
   "type": "module",
   "main": "src/server.mjs",
   "scripts": {
-    "start": "node src/server.mjs",
-    "test": "node --test --test-concurrency=1 \"test/*.test.mjs\"",
+    "start": "node --disable-warning=ExperimentalWarning src/server.mjs",
+    "core": "node scripts/core.mjs",
+    "test": "node scripts/core.mjs && node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"test/*.test.mjs\"",
     "e2e": "node test/e2e-server.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   }
 }

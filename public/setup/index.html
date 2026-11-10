@@ -28,7 +28,7 @@
       <form id="choose" class="card" hidden>
         <h1>Choose a passphrase</h1>
         <p>You'll sign in with this from now on, and the setup password stops working. Four or more random words works well, like <i>kettle orbit lemon fence</i>.</p>
-        <p class="muted">It never leaves this browser: the server only gets a key made from it, so it can't read your lists. Keep it somewhere safe. If you lose it, you can reset it and link the web page with a phone again.</p>
+        <p class="muted">It never leaves this browser: the server only gets a key made from it. Keep it somewhere safe. If you lose it, you can reset it (see the server's README); your phones stay connected.</p>
         <input type="text" name="username" id="choose-user" autocomplete="username" hidden />
         <label for="pass">Passphrase</label>
         <input id="pass" type="password" autocomplete="new-password" spellcheck="false" required />
@@ -41,10 +41,23 @@
         <button class="btn primary" type="submit" id="choose-go">Set passphrase</button>
       </form>
 
+      <form id="house" class="card" hidden>
+        <h1>Set up this server</h1>
+        <p>Your server keeps your household: the phones sync through it, at home and away, and it keeps your price history. Phones still work on their own when it's off.</p>
+        <label for="house-name">What do you call your house?</label>
+        <input id="house-name" autocomplete="off" maxlength="60" placeholder="Declan and Sarah" required />
+        <p class="hint">Everyone you add sees this name, like "This phone was added as Sarah's phone on Declan and Sarah".</p>
+        <p class="muted">The server can read what phones share with it (so it can merge it, keep history and run Home Assistant). Keep its data folder private, ideally on an encrypted disk.</p>
+        <p class="error" id="house-error" role="alert" hidden></p>
+        <button class="btn primary" type="submit" id="house-go">Set up this server</button>
+      </form>
+
       <section id="done" class="card" hidden>
         <h1>All set</h1>
         <p>Your passphrase is set and the setup password no longer works.</p>
-        <p>Next, sign in with your passphrase, then use <b>Link with a phone</b> so this browser can see your household, and <b>Add a phone</b> for each phone.</p>
+        <p id="done-v3">Next, sign in with your passphrase, then open <b>Server and phones</b> and use <b>Add a phone</b> for each phone (they need Restock 0.9.4 or newer).</p>
+        <p id="done-v2" hidden>This server keeps a household from Restock 0.9.3. To move it onto the server, sign in, open <b>Server and phones → Take this household</b>, and scan the code with the household's owner phone (Restock 0.9.4 or newer). Until then everything works as before.</p>
+        <p id="done-old" hidden>Next, sign in with your passphrase, then use <b>Link with a phone</b> so this browser can see your household, and <b>Add a phone</b> for each phone.</p>
         <a class="btn primary" href="/">Open Restock</a>
       </section>
     </main>

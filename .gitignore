@@ -2,3 +2,5 @@ node_modules/
 data/
 # The web app, built from the Restock repo (npm run build:server-web) or fetched by the Dockerfile
 public/app/
+# The Restock core (npm run build:server-core in Restock, or node scripts/core.mjs)
+core/

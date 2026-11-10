@@ -4,8 +4,8 @@ name: Server image
 # Registry as ghcr.io/<owner>/restock-server:<version> and :latest. Runs when a release is
 # published, when a v* tag is pushed, or by hand from the Actions tab.
 #
-# The web app comes from the Restock repo at the tag in the Dockerfile (RESTOCK_REF), unless a
-# manual run names another one.
+# The web app and the Restock core come from the Restock repo at the tag in the Dockerfile
+# (RESTOCK_REF, which must be v<package.json's version>), unless a manual run names another one.
 
 on:
   release:
@@ -38,8 +38,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.23'
+      # The tests need the Restock core (core/restock-core.mjs), built from Restock at the Dockerfile's RESTOCK_REF.
+      - name: Fetch Restock for the core
+        env:
+          REF_INPUT: ${{ inputs.restock_ref }}
+        run: |
+          set -eu
+          if [ -n "$REF_INPUT" ] && [[ ! "$REF_INPUT" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]]; then
+            echo "::error::restock_ref must be a tag or branch name."
+            exit 1
+          fi
+          ref="${REF_INPUT:-$(sed -n 's/^ARG RESTOCK_REF=//p' Dockerfile)}"
+          git clone --depth 1 --branch "$ref" https://github.com/d-plenty/Restock "$RUNNER_TEMP/restock"
+          (cd "$RUNNER_TEMP/restock" && npm ci --no-audit --no-fund)
       - run: npm test
+        env:
+          RESTOCK_DIR: ${{ runner.temp }}/restock
 
   image:
     needs: test
@@ -57,8 +72,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           PRERELEASE: ${{ github.event.release.prerelease || false }}
           WANT_LATEST: ${{ github.event_name != 'workflow_dispatch' || inputs.latest }}
+          REF_INPUT: ${{ inputs.restock_ref }}
         run: |
           set -eu
+          # Only ever a plain ref (it goes into the build's arguments, one per line).
+          if [ -n "$REF_INPUT" ] && [[ ! "$REF_INPUT" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]]; then
+            echo "::error::restock_ref must be a tag or branch name."
+            exit 1
+          fi
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           image="ghcr.io/${owner}/restock-server"
           pkg_version="$(node -p 'require("./package.json").version')"
@@ -66,6 +87,11 @@ jobs:
           app_version="$(sed -n 's/^version: "\(.*\)"$/\1/p' restock/config.yaml)"
           if [ "$app_version" != "$pkg_version" ] || ! grep -q "^FROM ghcr.io/d-plenty/restock-server:${pkg_version}\$" restock/Dockerfile; then
             echo "::error::restock/config.yaml and restock/Dockerfile must say ${pkg_version}, like package.json."
+            exit 1
+          fi
+          # The web app and the core come from Restock at the same version (unless a manual run names another).
+          if [ -z "$REF_INPUT" ] && ! grep -q "^ARG RESTOCK_REF=v${pkg_version}\$" Dockerfile; then
+            echo "::error::The Dockerfile's RESTOCK_REF must be v${pkg_version}, like package.json."
             exit 1
           fi
           if [ "$EVENT" = "workflow_dispatch" ] && [[ ! "$REF" =~ ^v[0-9] ]]; then
@@ -76,6 +102,12 @@ jobs:
               echo "::error::The tag says $version but package.json says $pkg_version. Bump package.json first."
               exit 1
             fi
+          fi
+          # Built from another Restock ref than the release's: never under the release's own tag or
+          # :latest (the Home Assistant app pulls restock-server:<version>).
+          want_ref="$(sed -n 's/^ARG RESTOCK_REF=//p' Dockerfile)"
+          if [ -n "$REF_INPUT" ] && [ "$REF_INPUT" != "$want_ref" ]; then
+            version="${version}-restock-$(printf '%s' "$REF_INPUT" | tr -c 'A-Za-z0-9._-' '-')"
           fi
           tags="${image}:${version}"
           # :latest only for a full release (not 0.9.3-rc1, not a pre-release).
