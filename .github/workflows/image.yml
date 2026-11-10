@@ -62,6 +62,12 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           image="ghcr.io/${owner}/restock-server"
           pkg_version="$(node -p 'require("./package.json").version')"
+          # The Home Assistant app (restock/) must name the same version and image tag.
+          app_version="$(sed -n 's/^version: "\(.*\)"$/\1/p' restock/config.yaml)"
+          if [ "$app_version" != "$pkg_version" ] || ! grep -q "^FROM ghcr.io/d-plenty/restock-server:${pkg_version}\$" restock/Dockerfile; then
+            echo "::error::restock/config.yaml and restock/Dockerfile must say ${pkg_version}, like package.json."
+            exit 1
+          fi
           if [ "$EVENT" = "workflow_dispatch" ] && [[ ! "$REF" =~ ^v[0-9] ]]; then
             version="$pkg_version"
           else

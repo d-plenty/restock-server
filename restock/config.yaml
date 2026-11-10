@@ -1,0 +1,28 @@
+# The Restock server as a Home Assistant app, for Home Assistant OS (and Supervised) installs.
+# It's the same server as the Docker image; this only wraps it. Keep version in step with
+# package.json (the image tag below must exist on ghcr.io).
+name: Restock server
+version: "0.9.3"
+slug: restock_server
+description: Your own end-to-end encrypted sync server and web app for a Restock household
+url: https://github.com/d-plenty/restock-server
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+ports:
+  8787/tcp: 8787
+ports_description:
+  8787/tcp: Restock server (phones and the web page)
+webui: "http://[HOST]:[PORT:8787]/"
+backup: hot
+options:
+  password: change-me-now
+schema:
+  password: password
+  user: str?
+  home_url: str?
+  away_url: str?
+  trust_proxy: list(true|cloudflare)?

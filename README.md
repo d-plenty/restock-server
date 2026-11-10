@@ -10,7 +10,8 @@ Your own sync box for [Restock](https://github.com/d-plenty/Restock), the local-
 
 ## Contents
 
-1. [Start it](#1-start-it)
+- [Which machine?](#which-machine): Home Assistant, a Raspberry Pi or mini PC, or a NAS
+1. [Start it](#1-start-it) (Docker, Compose, or [as a Home Assistant app](#as-a-home-assistant-app-no-docker-needed))
 2. [Log in and set a passphrase](#2-log-in-and-set-a-passphrase)
 3. [Add your phones](#3-add-your-phones)
 4. [Link the web page with a phone](#4-link-the-web-page-with-a-phone)
@@ -24,9 +25,46 @@ Your own sync box for [Restock](https://github.com/d-plenty/Restock), the local-
 - [Settings](#settings) and [what's in the data volume](#whats-in-the-data-volume)
 - [For developers](#for-developers)
 
+## Which machine?
+
+Anything that stays on at home works, and it needs very little: a Raspberry Pi is plenty for a household. Pick the guide for what you have, then carry on from [2. Log in and set a passphrase](#2-log-in-and-set-a-passphrase).
+
+| You have | Do this |
+|---|---|
+| Home Assistant OS (on a Pi, mini PC, NUC or a VM) | [As a Home Assistant app](#as-a-home-assistant-app-no-docker-needed). No Docker needed. |
+| A Raspberry Pi 4 or 5, or a mini PC / old laptop running Linux | [Install Docker](#raspberry-pi-mini-pc-or-old-laptop), then [1. Start it](#1-start-it). |
+| A NAS: TrueNAS, Synology, QNAP or Unraid | [On a NAS](#on-a-nas), using `compose.yaml`. |
+| A machine that already runs Docker, Dockge or Portainer | [1. Start it](#1-start-it). |
+
+### Raspberry Pi, mini PC or old laptop
+
+1. **The operating system.**
+   - **Raspberry Pi:** a Pi 4 or 5 with **Raspberry Pi OS (64-bit)**. Install it with [Raspberry Pi Imager](https://www.raspberrypi.com/software/). The server only comes for 64-bit (arm64), so a Pi 3 or older, or the 32-bit OS, won't run it.
+   - **Mini PC or laptop:** Ubuntu Server or Debian (64-bit) is the easiest.
+2. **Install Docker.** On the machine, run Docker's install script, then let your user run Docker and log out and back in:
+   ```sh
+   curl -fsSL https://get.docker.com | sh
+   sudo usermod -aG docker $USER
+   ```
+   Check it worked with `docker run --rm hello-world`.
+3. **Give it a fixed address,** so the phones can always find it. In your router's settings, reserve the machine's current IP address for it (often called a DHCP reservation or fixed IP). To see its current address, run `hostname -I` on it; the first number, such as `192.168.1.20`, is the one.
+4. **Start the server** with the second `docker run` command in [1. Start it](#1-start-it), the one with `--restart unless-stopped`, so it starts again by itself after a power cut.
+5. If the machine has a firewall turned on (Ubuntu's `ufw`, say), let the phones in: `sudo ufw allow 8787/tcp`.
+
+### On a NAS
+
+Use [`compose.yaml`](compose.yaml) from this repo. Change `RESTOCK_PASSWORD` in it first.
+
+- **TrueNAS SCALE (24.10 or newer):** *Apps → Discover Apps → ⋮ → Install via YAML*, paste in `compose.yaml`, then *Save*. See [below](#with-docker-compose-dockge-portainer-or-truenas) for keeping the data on a dataset.
+- **Synology (DSM 7.2 or newer, on a model with Container Manager):** install **Container Manager** from Package Center. Then *Container Manager → Project → Create*, give it a name and a folder, choose *Create docker-compose.yml*, paste in `compose.yaml`, and *Done*.
+- **QNAP:** install **Container Station**. Then *Applications → Create*, name it `restock-server`, paste in `compose.yaml`, and *Create*.
+- **Unraid:** install the **Docker Compose Manager** plugin from the Apps tab. Then *Docker → Add New Stack*, name it `restock-server`, *Edit Stack → Compose File*, paste in `compose.yaml`, *Save Changes*, then *Compose Up*.
+
+The NAS's own address (the one you open its settings with) is the server's address, on port 8787: for example `http://192.168.1.10:8787`.
+
 ## 1. Start it
 
-You need [Docker](https://docs.docker.com/get-docker/). Run this on the machine that'll be the server:
+You need [Docker](https://docs.docker.com/get-docker/) (see [Which machine?](#which-machine) if you don't have it yet). Run this on the machine that'll be the server:
 
 ```sh
 docker run -d --name restock-server -p 8787:8787 -v restock-data:/data -e RESTOCK_PASSWORD=admin ghcr.io/d-plenty/restock-server:latest
@@ -53,6 +91,17 @@ Use [`compose.yaml`](compose.yaml) from this repo. Change `RESTOCK_PASSWORD` in 
 - **Portainer:** *Stacks → Add stack*, paste in `compose.yaml`, then *Deploy the stack*.
 - **TrueNAS SCALE (24.10 or newer):** *Apps → Discover Apps → ⋮ → Install via YAML*, paste in `compose.yaml`, then *Save*. To keep the data on a dataset instead of a Docker volume, change `restock-data:/data` to your dataset's path, for example `/mnt/tank/apps/restock:/data`, and let the server (user 1000) write to it: `sudo chown -R 1000:1000 /mnt/tank/apps/restock`.
 
+### As a Home Assistant app (no Docker needed)
+
+If you run Home Assistant OS (or a Supervised install), the server can run inside Home Assistant as an app (apps were called add-ons before Home Assistant 2026.2). Your Home Assistant backups then include it.
+
+1. In Home Assistant, go to **Settings → Apps → App store**, open the **⋮** menu, choose **Repositories**, and add `https://github.com/d-plenty/restock-server`.
+2. Find **Restock server** in the store and **Install** it.
+3. In its **Configuration** tab, set **password** to your own, then **Save** and **Start**.
+4. **Open web UI**, or go to `http://<your Home Assistant's address>:8787`, and carry on from step 2 below.
+
+Away from home, give phones an address that reaches port 8787 on Home Assistant: Tailscale, or a Cloudflare Tunnel hostname pointing at `http://<Home Assistant's address>:8787` (then set **trust_proxy** to `cloudflare`). Home Assistant Container and Core installs don't have apps: use Docker as above.
+
 ## 2. Log in and set a passphrase
 
 1. On a computer on the same network, open `http://<the server's address>:8787`, for example `http://192.168.1.10:8787`. (On the server itself, `http://localhost:8787` works too.)
@@ -67,7 +116,7 @@ Your passphrase never leaves the browser. The browser turns it into two keys: on
 Each phone in the household joins the server once:
 
 1. On the web page, choose **Add a phone** (on the first visit it's under *No phone on this server yet? Add one first*; later it's on the **Phones** page). A QR code appears. It works once, for 10 minutes.
-2. On the phone, open Restock and go to **Settings → Sync and backups → Local sync → Restock server**, then scan the code.
+2. On the phone, open Restock and go to **Settings → Sync and backups → Restock server** and tap **Connect** (if the phone isn't in a household yet, Connect starts one first), then scan the code.
 3. Do the same for each phone, with a new code each time.
 
 Phones need to be in the same Restock household first (set that up on the phones as usual). The server carries the household's changes; it doesn't make the household.
@@ -79,7 +128,7 @@ Each phone gets its own key for the server, and the server keeps only its public
 The first time you sign in, the web page can't see your household yet: only your phones have the key. To hand it over:
 
 1. On the web page, choose **Link with a phone**. A QR code appears.
-2. On a phone you added in step 3, open **Settings → Sync and backups → Local sync → Restock server → Scan the web page's code** and scan it.
+2. On a phone you added in step 3, open **Settings → Sync and backups → Restock server → Scan the web page's code** and scan it.
 3. The phone asks "Let this browser see your household?" Say yes.
 
 The phone seals the keys to that browser's own key, which is in the QR code, so the server can't read them or swap them. The browser saves them, locked with your passphrase. You only do this once.
@@ -145,7 +194,7 @@ docker restart restock-server
 
 Then open the web page, log in with **admin** and your `RESTOCK_PASSWORD` again, and choose a new passphrase.
 
-**What's lost:** the web page's saved keys and every browser sign-in. **What's kept:** your phones (they stay connected and keep syncing) and every file. After setting the new passphrase, do [Link with a phone](#3-link-the-web-page-with-a-phone) again.
+**What's lost:** the web page's saved keys and every browser sign-in. **What's kept:** your phones (they stay connected and keep syncing) and every file. After setting the new passphrase, do [Link with a phone](#4-link-the-web-page-with-a-phone) again.
 
 ## Recovering deleted files
 
@@ -175,7 +224,7 @@ Then run the same `docker run` command as before. Your data stays in the volume.
 
 With Compose: `docker compose pull && docker compose up -d`. In Dockge: *Update*. In Portainer: open the stack, then *Pull and redeploy*. On TrueNAS: *Apps*, select it, then *Update* (or *Edit → Save* to pull again).
 
-Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.9.2`) if you'd rather choose when to update.
+Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.9.3`) if you'd rather choose when to update.
 
 ## What the server can and can't see
 

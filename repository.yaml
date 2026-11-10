@@ -1,0 +1,5 @@
+# Home Assistant app repository (apps were called add-ons before Home Assistant 2026.2).
+# Add https://github.com/d-plenty/restock-server in Settings → Apps → App store → ⋮ → Repositories.
+name: Restock
+url: https://github.com/d-plenty/restock-server
+maintainer: d-plenty

@@ -18,7 +18,7 @@ ARG WEB_BUILD_IMAGE=node:22-bookworm-slim
 # ---- 1. the web app (built once, on the build machine's own platform: it's the same files for every platform) ----
 FROM --platform=$BUILDPLATFORM ${WEB_BUILD_IMAGE} AS web
 ARG WEB=auto
-ARG RESTOCK_REF=v0.9.2
+ARG RESTOCK_REF=v0.9.3
 ARG RESTOCK_REPO=https://github.com/d-plenty/Restock
 ARG RESTOCK_WEB_OUT=server/public/app
 WORKDIR /work

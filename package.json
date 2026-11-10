@@ -1,6 +1,6 @@
 {
   "name": "restock-server",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "private": true,
   "description": "Restock server: a self-hosted, end-to-end encrypted sync box and web app host for a Restock household.",
   "license": "GPL-3.0-only",
