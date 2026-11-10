@@ -23,6 +23,7 @@ import { promises as fs, readFileSync, existsSync, mkdirSync, appendFileSync, wr
 import { join, extname, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openState, atomicWrite, atomicWriteSync, dict } from './state.mjs';
+import { serverZone } from './zone.mjs';
 import { parseName, parseNameV3, canWrite, bodyOk, reservedDevice, DEVICE, WEB_ID, FOLDERS, FOLDERS_V3 } from './names.mjs';
 import { loadCore } from './v3/core.mjs';
 import { makeV3 } from './v3/api.mjs';
@@ -99,6 +100,8 @@ export function config(env = process.env) {
     trustProxy: /^cloudflare$/i.test(tp) ? 'cloudflare' : yes(tp),
     quiet: yes(env.RESTOCK_QUIET),
     now: Date.now,
+    // 0.9.5 (final review): the zone for the Data tab's months and days and the night's Auto delete (TZ).
+    timeZone: serverZone(env),
     mergeDelayMs: 1000,
   };
 }
@@ -243,6 +246,10 @@ const SECURITY = {
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
 };
+/** 0.9.5: the web app's own pages may use the camera (scanning a barcode on an iPhone); nothing else may. */
+export const APP_PERMISSIONS = 'camera=(self), microphone=(), geolocation=(), payment=(), usb=()';
+/** 0.9.5: the home screen web app's files (vite.server.config.ts in Restock). */
+const PWA_ICON = /^pwa\/[a-z0-9-]+\.png$/;
 /** For the pages (the web app and the setup page): only this server; wasm for sql.js. */
 export const PAGE_CSP = [
   "default-src 'self'",
@@ -323,7 +330,8 @@ export async function makeServer(cfg) {
   mkdirSync(TMP, { recursive: true });
   // Where the files really are (the folder itself may be a link); nothing outside it is served or written.
   const REAL_FILES = realpathSync(FILES);
-  const APP = join(PUBLIC, 'app');
+  // 0.9.5: appDir is for tests (a made-up web app); the server always serves public/app/.
+  const APP = cfg.appDir ? resolve(cfg.appDir) : join(PUBLIC, 'app');
   const SETUP = join(PUBLIC, 'setup');
   const maxFile = Math.max(1, cfg.maxFileMb) * 1024 * 1024;
   const maxTotal = Math.max(1, cfg.maxTotalMb) * 1024 * 1024;
@@ -821,6 +829,44 @@ export async function makeServer(cfg) {
     trashBytes += l.size;
     note('trashed', { file: name, by, size: l.size, why, kept: dir.slice(DATA.length + 1) });
     return true;
+  }
+  /** 0.9.5 (Data, "Backups"): empties the trash folders made before `cutoff` (ISO; all with none). How many went. */
+  async function emptyTrash(cutoff, { dryRun = false } = {}) {
+    const before = cutoff ? Date.parse(cutoff) : Infinity;
+    let n = 0;
+    for (const e of await fs.readdir(TRASH, { withFileTypes: true }).catch(() => [])) {
+      const t = stampTime(e.name);
+      if (Number.isFinite(t) && t >= before) continue;
+      // 0.9.5 (review): a dry run (Delete's Step 1) only counts.
+      if (dryRun) {
+        n++;
+        continue;
+      }
+      await fs.rm(join(TRASH, e.name), { recursive: true, force: true }).catch((err) => log('trash:', err.message));
+      n++;
+    }
+    if (!dryRun) await cleanTrash(true);
+    return n;
+  }
+  /** 0.9.5: the trash, for the Data page: { folders, files, bytes, oldest (ISO) }. */
+  async function trashInfo() {
+    let folders = 0;
+    let files = 0;
+    let oldest = null;
+    const count = async (p) => {
+      for (const e of await fs.readdir(p, { withFileTypes: true }).catch(() => [])) {
+        if (e.isDirectory()) await count(join(p, e.name));
+        else if (e.isFile()) files++;
+      }
+    };
+    for (const e of await fs.readdir(TRASH, { withFileTypes: true }).catch(() => [])) {
+      const t = stampTime(e.name);
+      if (!e.isDirectory() || !Number.isFinite(t)) continue;
+      folders++;
+      if (oldest === null || t < oldest) oldest = t;
+      await count(join(TRASH, e.name));
+    }
+    return { folders, files, bytes: await sizeOf(TRASH), oldest: oldest === null ? null : new Date(oldest).toISOString() };
   }
   await cleanTrash(true);
   const trashTimer = setInterval(() => void cleanTrash().catch((e) => log('trash:', e.message)), 60 * MIN);
@@ -1498,12 +1544,16 @@ export async function makeServer(cfg) {
     }
     const ext = extname(file).toLowerCase();
     const immutable = spa && /^assets\//.test(name);
+    // 0.9.5: the service worker and the manifest are checked every time (so an update is seen);
+    // the home screen icons can be kept for a day.
+    const icon = spa && PWA_ICON.test(name);
     res.writeHead(200, {
       ...SECURITY,
+      ...(spa ? { 'Permissions-Policy': APP_PERMISSIONS } : {}),
       'Content-Security-Policy': spa ? APP_CSP : PAGE_CSP,
       'Content-Type': TYPES[ext] || 'application/octet-stream',
       'Content-Length': s.size,
-      'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+      'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : icon ? 'public, max-age=86400' : 'no-cache',
     });
     if (req.method === 'HEAD') return res.end();
     const stream = (await fs.open(file, 'r')).createReadStream();
@@ -1586,6 +1636,8 @@ export async function makeServer(cfg) {
       writeServerFile,
       deleteServerFile,
       trashFile,
+      emptyTrash,
+      trashInfo,
       listFileNames: () => [...sizes.keys()],
       hasFile: (name) => sizes.has(name),
       verifyPhone,

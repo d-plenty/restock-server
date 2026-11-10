@@ -28,6 +28,9 @@ services:
       # Behind Cloudflare Tunnel: "cloudflare". Behind your own https reverse proxy: "true".
       # If you set it, remove the "ports:" lines above so nothing reaches the server around the proxy.
       # RESTOCK_TRUST_PROXY: "cloudflare"
+      # Your time zone: the Data tab's months and days, and Auto delete at 3 am, use it. Set yours
+      # (for example "Australia/Sydney", "Australia/Perth", "Pacific/Auckland"). Left out, it's UTC.
+      TZ: "Australia/Brisbane"
     read_only: true
     security_opt:
       - no-new-privileges:true

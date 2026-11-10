@@ -1,0 +1,57 @@
+name: Bug
+description: Something on the server's web page doesn't work or looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please leave out your passphrase, recovery key, backup and export files, addresses and anything else personal.
+        A problem with the Restock app on a phone? Please [report it in Restock's issues](https://github.com/d-plenty/Restock/issues/new/choose) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Any message the page showed helps.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to make it happen again
+      placeholder: |
+        1. Open Data
+        2. Click ...
+  - type: input
+    id: version
+    attributes:
+      label: Restock server version
+      description: In Settings on the web page, next to your user name, or the image tag you run.
+      placeholder: 0.9.5
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run it?
+      options:
+        - docker run
+        - Docker Compose
+        - Dockge
+        - Portainer
+        - TrueNAS
+        - Synology, QNAP or Unraid
+        - Home Assistant app
+        - Without Docker (node)
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and computer
+      placeholder: Firefox 140 on Windows 11, or Safari on iPhone (from the home screen)
+  - type: textarea
+    id: shots
+    attributes:
+      label: Screenshots or logs
+      description: Drag images in here, or paste the last lines of `docker logs restock-server` (or the Home Assistant app's Log tab). Crop out anything private.

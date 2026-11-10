@@ -22,7 +22,7 @@ ARG WEB_BUILD_IMAGE=node:22.23-bookworm-slim
 # ---- 1. the web app and the core (built once, on the build machine's own platform: the same files for every platform) ----
 FROM --platform=$BUILDPLATFORM ${WEB_BUILD_IMAGE} AS web
 ARG WEB=auto
-ARG RESTOCK_REF=v0.9.4
+ARG RESTOCK_REF=v0.9.5
 ARG RESTOCK_REPO=https://github.com/d-plenty/Restock
 ARG RESTOCK_WEB_OUT=server/public/app
 WORKDIR /work
@@ -67,7 +67,9 @@ COPY scripts ./scripts
 COPY public/setup ./public/setup
 COPY --from=web /web ./public/app
 COPY --from=web /core ./core
-RUN mkdir -p /data && chown node:node /data
+# tzdata: so TZ (compose.yaml) is a real zone for the system too (the server itself works out
+# months and days with Node's own time zone data). About 1.5 MB.
+RUN apk add --no-cache tzdata && mkdir -p /data && chown node:node /data
 USER node
 VOLUME /data
 EXPOSE 8787

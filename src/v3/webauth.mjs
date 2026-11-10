@@ -83,6 +83,46 @@ export function makeWebAuth(R) {
     return !!ch && ch.expires >= now();
   }
 
+  /**
+   * 0.9.5 (review): which household is on the server now (null: none). Each household made here gets
+   * its own id (house.mjs newHouseId); a household from before 0.9.5 gets one the first time it's asked.
+   */
+  function houseId() {
+    if (!S.house) return null;
+    if (typeof S.house.id !== 'string' || !S.house.id) {
+      S.house.id = b64u(randomBytes(12));
+      R.st.saveSoon();
+    }
+    return S.house.id;
+  }
+  /**
+   * 0.9.5 (review): is this session's copy of the household on the server now? A session from before
+   * 0.9.5 (no `house`) is of the household there is (Delete everything ends every other session, so
+   * none from an earlier household is left); it's noted as that one from now on.
+   */
+  function ofThisHouse(sess) {
+    if (!sess) return false;
+    const cur = houseId();
+    if (sess.house === undefined) {
+      sess.house = cur;
+      R.st.saveSoon();
+    }
+    return cur !== null && sess.house === cur;
+  }
+  /** 0.9.5 (review): a new household was made: the sessions with none yet (and the one that made it) are of it. */
+  function joinHouse(hash, all = false) {
+    const cur = houseId();
+    for (const [k, s] of Object.entries(S.sessions3)) if (all || k === hash || s.house === null || s.house === undefined) s.house = cur;
+    R.st.saveSoon();
+  }
+  /** 0.9.5 (review): the session that has this webId (a browser's file is restock-sync-web-<webId>.bin), or null. */
+  function byWebId(webId) {
+    if (typeof webId !== 'string' || !webId) return null;
+    const t = now();
+    for (const s of Object.values(S.sessions3)) if (s.webId === webId && t - s.lastUsed <= life(s)) return s;
+    return null;
+  }
+
   function newSession(kind, key, extra, req) {
     const ids = Object.keys(S.sessions3);
     if (ids.length >= WEB_LIMITS.maxSessions) {
@@ -97,6 +137,8 @@ export function makeWebAuth(R) {
       lastUsed: now(),
       label: browserLabel(req.headers['user-agent']),
       webId: b64u(randomBytes(12)),
+      // 0.9.5 (review): the household this session's copy is of (null: none yet, a server not set up).
+      house: houseId(),
       ...extra,
     };
     S.sessions3[b64u(require256(s))] = sess;
@@ -198,6 +240,11 @@ export function makeWebAuth(R) {
     S.sessions3 = Object.create(null);
     qr.clear();
   }
+  /** 0.9.5 (review): every browser session but this one (Delete everything); codes waiting go too. */
+  function endAllBut(hash) {
+    for (const k of Object.keys(S.sessions3)) if (k !== hash) delete S.sessions3[k];
+    qr.clear();
+  }
   function endPhoneSessions(device) {
     for (const [k, s] of Object.entries(S.sessions3)) if (s.kind === 'phone' && s.device === device) delete S.sessions3[k];
   }
@@ -267,5 +314,5 @@ export function makeWebAuth(R) {
     return Object.keys(S.sessions3).find((k) => k.slice(0, 22) === id) ?? null;
   }
 
-  return { challenge, useChallenge, login, header, check, body, seal, gift, expiresOf, endSession, endAll, endPhoneSessions, qrStart, qrApprove, qrCollect, list, byId, prune };
+  return { challenge, useChallenge, login, header, check, body, seal, gift, expiresOf, endSession, endAll, endAllBut, endPhoneSessions, houseId, ofThisHouse, joinHouse, byWebId, qrStart, qrApprove, qrCollect, list, byId, prune };
 }

@@ -59,7 +59,9 @@ function fresh() {
     // server's id (srv-<sid>); the house; Keep data for; browser sessions (v3, keyed by the hash of
     // the session id; each holds its session key).
     sessions3: {},
-    settings: { keepMonths: 12 },
+    // 0.9.5: Auto delete (0.9.4's Keep data for, same key) is off on a new server; an existing
+    // state.json keeps what it has (0.9.4 servers wrote 12 or the admin's choice).
+    settings: { keepMonths: null },
   };
 }
 

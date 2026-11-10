@@ -8,6 +8,7 @@ import { request } from 'node:http';
 import { nodeProblem, VERSION } from '../src/server.mjs';
 import { parseNameV3 } from '../src/names.mjs';
 import { start, house, addPhone, ent, item, line, rows, SHARE_PANTRY, SHARE_ALL, ITER, PASS, core, b64u, codeFields, V3Phone } from './helpers.mjs';
+const PKG_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 const DAY = 86_400_000;
 const daysAgo = (d) => new Date(Date.now() - d * DAY).toISOString();
@@ -18,7 +19,7 @@ describe('modes, health and setting up', () => {
     const r = await (await fetch(t.base + '/api/v3/health')).json();
     assert.deepEqual(r, { ok: true, app: 'restock-server', version: VERSION, api: 3, mode: 'new', core: true });
     assert.deepEqual(await (await fetch(t.base + '/api/v2/health')).json(), { ok: true, app: 'restock-server', version: VERSION, api: 2 });
-    assert.equal(VERSION, '0.9.4');
+    assert.equal(VERSION, PKG_VERSION);
     // keys.json is made at first start, 0600, and has the kex key.
     const k = JSON.parse(readFileSync(join(t.dir, 'keys.json'), 'utf8'));
     assert.ok(k.kex.pub && k.kex.priv);
@@ -40,7 +41,7 @@ describe('modes, health and setting up', () => {
     assert.equal(e.householdValue('receipts'), '1');
     const srv = core.parseServerRow(e.householdValue('server'));
     assert.equal(srv.sid, t.sid);
-    assert.equal(srv.keepMonths, 12);
+    assert.equal(srv.keepMonths, null); // 0.9.5: Auto delete is off on a new server
     assert.equal(srv.kex, JSON.parse(readFileSync(join(t.dir, 'keys.json'), 'utf8')).kex.pub);
     for (const r of rows(t, "SELECT pk, stamp, deleted, sig FROM sync_log WHERE tbl = 'household'")) {
       const v = e.householdValue(r.pk);
@@ -288,7 +289,7 @@ describe('phones: join, member join, upgrade, Remove, Leave', () => {
     assert.equal(a.gift.seed, true);
     assert.equal(a.gift.household.sid, t.sid);
     assert.ok(a.gift.secret);
-    assert.deepEqual(a.gift.server, { home: f.h, away: null, keepMonths: 12 });
+    assert.deepEqual(a.gift.server, { home: f.h, away: null, keepMonths: null });
     // Someone else's kex key doesn't open it.
     assert.throws(() => core.openJoin(core.joinKey(core.newEcdhKey().priv, core.unb64(f.k), randomBytes(16)), a.device, core.unb64(j.body.sealed)));
     const member = JSON.parse(t.R.engine.householdValue('member:' + a.device));
@@ -521,6 +522,9 @@ describe('what each phone shares (D9), and taking it back (section 14)', () => {
 describe('Keep data for', () => {
   test('old prices and receipts never come in; changing it prunes quietly (no deletes go out); archives and logs too', async () => {
     const t = await house();
+    // A server set up on 0.9.4 (Keep data for: 12 months by default) keeps its value (0.9.5: new ones are off).
+    t.state.settings.keepMonths = 12;
+    t.R.house.refreshServerRow();
     const a = await addPhone(t, 'A');
     const now = Date.now();
     const share = { tabs: ['pantry'], receipts: true, cards: false };
@@ -558,11 +562,15 @@ describe('Keep data for', () => {
     assert.equal(no.status, 403);
     assert.equal(no.body.error, 'confirm');
     assert.equal(rows(t, 'SELECT COUNT(*) AS n FROM prices')[0].n, 2);
-    const wrong = await t.web.put('/api/v3/settings', { keepMonths: 3, confirm: await t.web.confirm(Buffer.alloc(32, 7)) });
+    // 0.9.5: and the typed DELETE.
+    const untyped = await t.web.put('/api/v3/settings', { keepMonths: 3, confirm: await t.web.confirm() });
+    assert.equal(untyped.status, 400);
+    assert.equal(untyped.body.error, 'typed');
+    const wrong = await t.web.put('/api/v3/settings', { keepMonths: 3, typed: 'DELETE', confirm: await t.web.confirm(Buffer.alloc(32, 7)) });
     assert.equal(wrong.status, 403);
     assert.equal(wrong.body.error, 'current');
     assert.equal(core.parseServerRow(t.R.engine.householdValue('server')).keepMonths, 12);
-    const s = await t.web.put('/api/v3/settings', { keepMonths: 3, confirm: await t.web.confirm() });
+    const s = await t.web.put('/api/v3/settings', { keepMonths: 3, typed: 'DELETE', confirm: await t.web.confirm() });
     assert.equal(s.status, 200);
     assert.equal(s.body.keepMonths, 3);
     assert.deepEqual(rows(t, 'SELECT price FROM prices ORDER BY date').map((r) => r.price), [3]);
@@ -581,7 +589,8 @@ describe('Keep data for', () => {
     const own = await a.serverFile(t.sid);
     assert.ok(!own.entries.some((x) => x.deleted && (x.tbl === 'prices' || x.tbl === 'receipts')));
     // Until I delete, and Delete older data now.
-    assert.equal((await t.web.put('/api/v3/settings', { keepMonths: 7 })).status, 400);
+    assert.equal((await t.web.put('/api/v3/settings', { keepMonths: 121 })).status, 400);
+    assert.equal((await t.web.put('/api/v3/settings', { keepMonths: 2.5 })).status, 400);
     assert.equal((await t.web.put('/api/v3/settings', { keepMonths: null })).body.keepMonths, null);
     assert.equal(core.parseServerRow(t.R.engine.householdValue('server')).keepMonths, null);
     // Delete older data now: the passphrase again too, and a challenge works once.
@@ -595,7 +604,7 @@ describe('Keep data for', () => {
     assert.equal((await t.web.post('/api/v3/prune', { before: new Date(now + DAY).toISOString() })).status, 400);
     // From Until I delete to any window deletes data; keeping more (or Until I delete) deletes nothing.
     assert.equal((await t.web.put('/api/v3/settings', { keepMonths: 6 })).status, 403);
-    assert.equal((await t.web.put('/api/v3/settings', { keepMonths: 6, confirm: await t.web.confirm() })).status, 200);
+    assert.equal((await t.web.put('/api/v3/settings', { keepMonths: 6, typed: 'DELETE', confirm: await t.web.confirm() })).status, 200);
     assert.equal((await t.web.put('/api/v3/settings', { keepMonths: 12 })).status, 200);
     assert.equal((await t.web.put('/api/v3/settings', { keepMonths: null })).status, 200);
   });

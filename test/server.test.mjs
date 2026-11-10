@@ -10,6 +10,7 @@ import { parseName } from '../src/names.mjs';
 import { Browser, Phone, seal, vault, p256, b64u, derive } from './client.mjs';
 import { pbkdf2Js, sha256 as jsSha256 } from '../public/setup/pbkdf2.js';
 import { checkPassphrase } from '../public/setup/strength.js';
+const PKG_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 const ITER = 1000; // the server never sees the iteration count; fewer keeps the tests quick
 const PASS = 'kettle orbit lemon fence';
@@ -67,7 +68,7 @@ describe('health, headers and pages', () => {
     const r = await t.browser().get('/api/v2/health');
     assert.equal(r.status, 200);
     assert.deepEqual(r.body, { ok: true, app: 'restock-server', version: VERSION, api: 2 });
-    assert.equal(VERSION, '0.9.4');
+    assert.equal(VERSION, PKG_VERSION);
     assert.equal(r.headers.get('cache-control'), 'no-store');
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(r.headers.get('referrer-policy'), 'no-referrer');

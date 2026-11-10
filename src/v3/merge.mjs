@@ -8,6 +8,7 @@ import { readFileSync, lstatSync, readdirSync, rmSync, chmodSync } from 'node:fs
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseNameV3 } from '../names.mjs';
+import { hourIn, serverZone } from '../zone.mjs';
 
 const DAY = 24 * 3600 * 1000;
 const sha256hex = (b) => createHash('sha256').update(b).digest('hex');
@@ -28,7 +29,20 @@ const SERVER_TABLES = [
   // What phones shared of the specials and catalogues they fetched (never fetched by the server).
   'CREATE TABLE IF NOT EXISTS srv_specials (chain TEXT PRIMARY KEY, at TEXT NOT NULL, device TEXT, list TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS srv_catalogues (chain TEXT PRIMARY KEY, at TEXT NOT NULL, url TEXT NOT NULL, note TEXT)',
+  // 0.9.5: what was bought, from list lines ticked off (data.mjs sweep): one row a tick, keyed by the
+  // line and its checked_at (ms). `price` is per pack, `total` = price × qty; `usual` the usual price
+  // then; `src` where the price came from: "line" (the line's own), "price" (the newest known), "none".
+  `CREATE TABLE IF NOT EXISTS srv_spend (
+    entry_id TEXT NOT NULL, checked_at INTEGER NOT NULL, at TEXT NOT NULL,
+    chain TEXT, section TEXT, item_id TEXT, product_id TEXT, text TEXT NOT NULL,
+    qty INTEGER NOT NULL DEFAULT 1, price REAL, total REAL, usual REAL, special INTEGER NOT NULL DEFAULT 0, src TEXT NOT NULL,
+    PRIMARY KEY (entry_id, checked_at))`,
+  'CREATE INDEX IF NOT EXISTS srv_spend_at ON srv_spend(checked_at)',
 ];
+/** What Auto delete (0.9.4's Keep data for) covers: data.mjs kinds. */
+export const AUTO_KINDS = ['prices', 'receipts', 'stats', 'logs'];
+/** "Everything", for a delete with no date: after any date data can have. */
+export const FOREVER = '9999-12-31T23:59:59.999Z';
 
 export function makeMerger(R) {
   const { core, S, keys, now } = R;
@@ -61,7 +75,7 @@ export function makeMerger(R) {
     const e = new core.WebSyncEngine(core.syncDbOfNode(raw), core.verifySig, core.signedText, now, {
       role: 'server',
       sign: (text) => core.signWithPkcs8(K.owner.priv, text),
-      keepFrom: () => core.keepCutoff(R.house.keepMonths(), now()),
+      keepFrom: () => R.house.cutoff(now()),
     });
     R.engine = e;
     e.setMeta('device', 'srv-' + S.sid);
@@ -69,6 +83,9 @@ export function makeMerger(R) {
     e.setMeta('owner_pin', ownerPub ?? K.owner.pub);
     // The server's settings, so household settings rows for shops people added say which tab they're on.
     raw.exec("INSERT OR IGNORE INTO kv (key, value) VALUES ('settings', '{}')");
+    // 0.9.5: once, after an update: every phone's file is read again, for the General list lines a
+    // 0.9.4 server passed over (the next merge, at start, takes them in).
+    e.catchUpLists?.();
     return e;
   }
   function closeDb() {
@@ -205,10 +222,49 @@ export function makeMerger(R) {
     }
   }
 
+  /**
+   * 0.9.5 (review): a browser's file whose session is gone (signed out, run out, or of a household
+   * that isn't this one): never read again, and moved to the trash. Its changes came in while it was
+   * signed in; read again later (after a catch-up, a restart) it could only bring back what was
+   * deleted since. The 0.9.3 web's own file (its account's webId) stays, as the handover reads it.
+   */
+  function staleWeb(parsed) {
+    if (parsed?.kind !== 'sync' || !parsed.owner.startsWith('web-')) return false;
+    const webId = parsed.owner.slice(4);
+    if (S.account?.webId && webId === S.account.webId) return false;
+    const sess = R.web?.byWebId(webId);
+    return !sess || !R.web.ofThisHouse(sess);
+  }
+  const trashing = new Set();
+  function dropStaleWeb(name) {
+    if (trashing.has(name)) return;
+    trashing.add(name);
+    void R.trashFile(name, 'srv-' + S.sid, 'browser signed out')
+      .then((moved) => moved && logLine('log', 'web-file-dropped', parsed(name), { file: name }))
+      .catch(() => undefined)
+      .finally(() => trashing.delete(name));
+  }
+  const parsed = (name) => parseNameV3(name)?.owner ?? null;
+  /** 0.9.5 (review): every browser file whose session is gone, to the trash (the nightly round, a start). */
+  function dropStaleWebFiles() {
+    let n = 0;
+    for (const name of R.listFileNames()) {
+      if (staleWeb(parseNameV3(name))) {
+        dropStaleWeb(name);
+        n++;
+      }
+    }
+    return n;
+  }
+
   function mergeOne(name) {
     const parsed = parseNameV3(name);
     if (!parsed || (parsed.kind !== 'sync' && parsed.kind !== 'archive')) return;
     if (parsed.kind === 'sync' && parsed.owner === 'srv-' + S.sid) return;
+    if (staleWeb(parsed)) {
+      dropStaleWeb(name);
+      return;
+    }
     const file = join(R.FILES, ...name.split('/'));
     let bytes;
     try {
@@ -230,12 +286,20 @@ export function makeMerger(R) {
       return;
     }
     const msg = opened.msg;
+    // 0.9.5 (review): read again unchanged by the one-time catch-up (engine catchUpLists): only the
+    // General lines never had here (takeFile), nothing else of it; an archive not at all.
+    const catchingUp = e.catchingUp?.(name, sum) ?? false;
     try {
+      if (parsed.kind === 'archive' && catchingUp) {
+        e.setMeta('catchup:folder_seen:' + name, null);
+        e.setMeta('folder_seen:' + name, sum);
+        return;
+      }
       if (parsed.kind === 'sync') {
         if (msg && Array.isArray(msg.entries)) msg.entries = msg.entries.filter(branchRowOk);
         const device = parsed.owner;
         const phone = !device.startsWith('web-') && e.householdValue('removed:' + device) === null;
-        if (phone) {
+        if (phone && !catchingUp) {
           notePhotos(msg.photos, device);
           takeSpecials(device, msg);
         }
@@ -246,6 +310,7 @@ export function makeMerger(R) {
         if (n > 0) R.note('changes-in', { by: device, changes: n });
       } else {
         if (e.householdValue('removed:' + parsed.owner) === null) notePhotos(msg.photos, parsed.owner);
+        floorArchive(msg);
         const n = e.takeArchive(msg);
         e.setMeta('folder_seen:' + name, sum);
         logLine('log', 'merged', parsed.owner, { file: name, added: n });
@@ -304,6 +369,12 @@ export function makeMerger(R) {
   function writeOwn() {
     const e = R.engine;
     if (!e || !K.keyv || S.mode !== 'v3') return false;
+    // 0.9.5: whatever just changed the list (a merge, Home Assistant, the web), the ticks are noted first.
+    try {
+      R.data?.sweep();
+    } catch (err) {
+      logLine('log', 'spend-failed', null, { error: String(err?.message ?? err).slice(0, 200) });
+    }
     const name = core.serverFileName(S.sid);
     const extra = specialsOut();
     const extraMark = sha256hex(JSON.stringify(extra)).slice(0, 16);
@@ -377,25 +448,26 @@ export function makeMerger(R) {
     return new Date(Date.UTC(y, m, 1)).toISOString() <= cutoff;
   }
 
-  /** Drops what's older than `cutoff` quietly (no deletes go out): prices, receipts and their photos, archives, logs. */
-  async function pruneTo(cutoff, why = 'keep-data-for') {
-    const e = R.engine;
-    if (!e || !cutoff) return null;
-    const gone = e.prune(cutoff);
-    let photos = 0;
-    for (const r of gone.receipts) {
-      const paths = [];
-      if (r.photo) paths.push(r.photo);
-      if (r.pages) {
-        try {
-          const p = JSON.parse(r.pages);
-          if (Array.isArray(p)) for (const x of p) if (typeof x === 'string') paths.push(x);
-          else if (p && typeof p === 'object') for (const x of Object.values(p)) if (typeof x === 'string') paths.push(x);
-        } catch {
-          for (const x of String(r.pages).split(',')) if (x.trim()) paths.push(x.trim());
-        }
+  /** The receipts' photos (photos/<sha>.bin) no receipt uses any more, to the trash. */
+  /** The photo paths a receipt row names (its photo, and its pages). */
+  function photoPaths(r) {
+    const paths = [];
+    if (r.photo) paths.push(r.photo);
+    if (r.pages) {
+      try {
+        const p = JSON.parse(r.pages);
+        const list = Array.isArray(p) ? p : p && typeof p === 'object' ? Object.values(p) : [];
+        for (const x of list) if (typeof x === 'string') paths.push(x);
+      } catch {
+        for (const x of String(r.pages).split(',')) if (x.trim()) paths.push(x.trim());
       }
-      for (const p of paths) {
+    }
+    return paths;
+  }
+  async function dropPhotos(receipts, why) {
+    let photos = 0;
+    for (const r of receipts) {
+      for (const p of photoPaths(r)) {
         const row = raw.prepare('SELECT sha FROM srv_photos WHERE path = ?').get(p);
         if (!row) continue;
         const still = raw.prepare("SELECT 1 FROM receipts WHERE photo = ? OR instr(COALESCE(pages, ''), ?) > 0 LIMIT 1").get(p, p);
@@ -406,31 +478,193 @@ export function makeMerger(R) {
         if (await R.trashFile(`photos/${row.sha}.bin`, 'srv-' + S.sid, why)) photos++;
       }
     }
-    let archives = 0;
+    return photos;
+  }
+
+  /**
+   * Prices and receipts dated before `cutoff`, quietly (applying = 1: no deletes go out), by the
+   * engine's own rule (prune): never each product's newest price, never a pinned receipt. Unlike the
+   * engine's (Auto delete, whose input filter keeps them out), a receipt's sync_log row stays, so a
+   * phone's unchanged copy doesn't bring a deleted receipt back.
+   */
+  function dropRows(cutoff, { prices, receipts }) {
+    const out = { prices: 0, receipts: [] };
+    raw.exec('BEGIN');
+    try {
+      raw.exec("INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('applying', '1')");
+      if (prices) {
+        const where = `date < ? AND source <> 'demo' AND date < (SELECT MAX(q.date) FROM prices q WHERE q.product_id = prices.product_id)`;
+        out.prices = Number(raw.prepare(`SELECT COUNT(*) AS n FROM prices WHERE ${where}`).get(cutoff).n);
+        if (out.prices) raw.prepare(`DELETE FROM prices WHERE ${where}`).run(cutoff);
+      }
+      if (receipts) {
+        out.receipts = raw.prepare("SELECT id, photo, pages FROM receipts WHERE scanned_at < ? AND pinned = 0 AND id NOT LIKE 'demo-%'").all(cutoff).map((r) => ({ ...r }));
+        const del = raw.prepare('DELETE FROM receipts WHERE id = ?');
+        for (const r of out.receipts) del.run(r.id);
+      }
+      raw.exec("DELETE FROM sync_meta WHERE key = 'applying'");
+      raw.exec('COMMIT');
+    } catch (e) {
+      raw.exec('ROLLBACK');
+      throw e;
+    }
+    return out;
+  }
+
+  // ---------- 0.9.5 (review): the archive/ months and what Delete took off the server ----------
+
+  /** An archive month's file, opened (null: it can't be). */
+  function readArchive(name) {
+    try {
+      const bytes = readFileSync(join(R.FILES, ...name.split('/')));
+      const m = openFile(bytes).msg;
+      return m && typeof m === 'object' ? m : null;
+    } catch {
+      return null;
+    }
+  }
+  /**
+   * The archive months a delete moves to the trash: wholly before `cutoff`, and only when everything
+   * in one goes: its prices only when prices are deleted, its receipts only when receipts are, and
+   * never one holding a pinned receipt (pinned there, or here). One that can't be opened goes only
+   * when both are deleted (as on 0.9.4). The rest stay as they are; what of them was deleted stays
+   * out of the household (floorArchive), so reading one again brings nothing back.
+   */
+  function archivesFor(cutoff, k) {
+    const out = [];
+    if (!k.has('prices') && !k.has('receipts')) return out;
+    const pinned = raw.prepare('SELECT 1 FROM receipts WHERE id = ? AND pinned = 1');
     for (const n of R.listFileNames()) {
       const p = parseNameV3(n);
-      if (p?.kind !== 'archive') continue;
-      const month = n.slice(-11, -4);
-      if (monthBefore(month, cutoff) && (await R.trashFile(n, 'srv-' + S.sid, why))) archives++;
+      if (p?.kind !== 'archive' || !monthBefore(n.slice(-11, -4), cutoff)) continue;
+      const m = readArchive(n);
+      if (!m) {
+        if (k.has('prices') && k.has('receipts')) out.push(n);
+        continue;
+      }
+      const prices = Array.isArray(m.prices) && m.prices.length > 0;
+      const receipts = Array.isArray(m.receipts) ? m.receipts.filter((r) => r && typeof r === 'object') : [];
+      if (prices && !k.has('prices')) continue;
+      if (receipts.length && !k.has('receipts')) continue;
+      if (receipts.some((r) => Number(r.pinned) === 1 || (typeof r.id === 'string' && pinned.get(r.id)))) continue;
+      out.push(n);
     }
-    const logs = Number(raw.prepare('SELECT COUNT(*) AS n FROM srv_log WHERE at < ?').get(cutoff).n);
-    raw.prepare('DELETE FROM srv_log WHERE at < ?').run(cutoff);
+    return out;
+  }
+  /** Notes how far back prices or receipts were deleted (sync_meta prices_floor, receipts_floor). */
+  function raiseFloor(key, cutoff) {
+    const floor = cutoff === FOREVER ? iso() : cutoff;
+    const was = R.engine.meta(key);
+    if (!was || floor > was) R.engine.setMeta(key, floor);
+  }
+  /**
+   * An archive month taken in: nothing from before what Delete took off the server comes back
+   * (prices dated before prices_floor where the product has a price that new or newer here, as Auto
+   * delete's own rule; receipts scanned before receipts_floor, unless pinned).
+   */
+  function floorArchive(msg) {
+    const e = R.engine;
+    const pf = e.meta('prices_floor');
+    const rf = e.meta('receipts_floor');
+    if (pf && Array.isArray(msg.prices)) {
+      const has = raw.prepare('SELECT 1 FROM prices WHERE product_id = ? AND date >= ? LIMIT 1');
+      msg.prices = msg.prices.filter((p) => !(p && typeof p.date === 'string' && p.date < pf && typeof p.product_id === 'string' && has.get(p.product_id, p.date)));
+    }
+    if (rf && Array.isArray(msg.receipts)) msg.receipts = msg.receipts.filter((r) => !(r && typeof r.scanned_at === 'string' && r.scanned_at < rf && Number(r.pinned) !== 1));
+  }
+
+  /** The receipts' photo files dropPhotos would move to the trash (for a dry run), without changing anything. */
+  function photosFor(receipts) {
+    const going = new Set(receipts.map((r) => r.id));
+    const paths = new Set();
+    for (const r of receipts) for (const p of photoPaths(r)) paths.add(p);
+    const freed = new Set();
+    for (const p of paths) {
+      const still = raw.prepare("SELECT id FROM receipts WHERE photo = ? OR instr(COALESCE(pages, ''), ?) > 0").all(p, p).some((x) => !going.has(x.id));
+      if (!still && raw.prepare('SELECT 1 FROM srv_photos WHERE path = ?').get(p)) freed.add(p);
+    }
+    const shas = new Set();
+    for (const p of freed) {
+      const sha = raw.prepare('SELECT sha FROM srv_photos WHERE path = ?').get(p).sha;
+      const all = raw.prepare('SELECT path FROM srv_photos WHERE sha = ?').all(sha).map((x) => x.path);
+      if (all.every((x) => freed.has(x)) && R.hasFile(`photos/${sha}.bin`)) shas.add(sha);
+    }
+    return shas.size;
+  }
+
+  /**
+   * Drops what's older than `cutoff` quietly (no deletes go out). `kinds` (data.mjs): prices (and the
+   * archive/ months that hold only what goes), receipts (and their photos, and those archive/
+   * months), stats (srv_spend), logs (srv_log), backups (the trash). Auto delete ("keep-data-for")
+   * is AUTO_KINDS and runs the engine's prune, as 0.9.4 did. Never the shopping list, the pantry,
+   * categories, each product's newest price, or a pinned receipt.
+   * 0.9.5: `dryRun` counts exactly what would go, and changes nothing.
+   */
+  async function pruneTo(cutoff, why = 'keep-data-for', kinds = AUTO_KINDS, { dryRun = false } = {}) {
+    const e = R.engine;
+    if (!e || !cutoff) return null;
+    const k = new Set(kinds);
+    if (dryRun) return countTo(cutoff, k);
+    const gone =
+      why === 'keep-data-for' && k.has('prices') && k.has('receipts') ? e.prune(cutoff) : dropRows(cutoff, { prices: k.has('prices'), receipts: k.has('receipts') });
+    const photos = await dropPhotos(gone.receipts, why);
+    if (k.has('prices')) raiseFloor('prices_floor', cutoff);
+    if (k.has('receipts')) raiseFloor('receipts_floor', cutoff);
+    let archives = 0;
+    for (const n of archivesFor(cutoff, k)) if (await R.trashFile(n, 'srv-' + S.sid, why)) archives++;
+    let logs = 0;
+    if (k.has('logs')) {
+      logs = Number(raw.prepare('SELECT COUNT(*) AS n FROM srv_log WHERE at < ?').get(cutoff).n);
+      raw.prepare('DELETE FROM srv_log WHERE at < ?').run(cutoff);
+    }
+    let stats = 0;
+    if (k.has('stats')) {
+      const ms = Math.min(Date.parse(cutoff) || 0, now());
+      stats = Number(raw.prepare('DELETE FROM srv_spend WHERE checked_at < ?').run(cutoff === FOREVER ? Number.MAX_SAFE_INTEGER : ms).changes);
+      // Lines still ticked on the list from before then aren't noted again (data.mjs sweep).
+      const floor = cutoff === FOREVER ? now() : ms;
+      if (floor > Number(e.meta('srv_spend_floor') ?? 0)) e.setMeta('srv_spend_floor', String(floor));
+    }
+    const backups = k.has('backups') ? await R.emptyTrash(cutoff) : 0;
     raw.prepare('DELETE FROM srv_specials WHERE at < ?').run(iso(now() - 60 * DAY));
-    const out = { cutoff, prices: gone.prices, receipts: gone.receipts.length, photos, archives, logs };
-    logLine('log', 'pruned', null, out);
+    const out = { cutoff, prices: gone.prices, receipts: gone.receipts.length, photos, archives, logs, stats, backups };
+    logLine('log', 'pruned', null, { ...out, kinds: [...k], why });
     writeOwn();
     return out;
   }
 
+  /** 0.9.5: what pruneTo would delete, counted by the same rules (POST /api/v3/data/delete with dryRun). */
+  async function countTo(cutoff, k) {
+    const out = { cutoff, prices: 0, receipts: 0, photos: 0, archives: 0, logs: 0, stats: 0, backups: 0, dryRun: true };
+    if (k.has('prices')) {
+      out.prices = Number(raw.prepare(`SELECT COUNT(*) AS n FROM prices WHERE date < ? AND source <> 'demo' AND date < (SELECT MAX(q.date) FROM prices q WHERE q.product_id = prices.product_id)`).get(cutoff).n);
+    }
+    if (k.has('receipts')) {
+      const going = raw.prepare("SELECT id, photo, pages FROM receipts WHERE scanned_at < ? AND pinned = 0 AND id NOT LIKE 'demo-%'").all(cutoff).map((r) => ({ ...r }));
+      out.receipts = going.length;
+      out.photos = photosFor(going);
+    }
+    out.archives = archivesFor(cutoff, k).length;
+    if (k.has('logs')) out.logs = Number(raw.prepare('SELECT COUNT(*) AS n FROM srv_log WHERE at < ?').get(cutoff).n);
+    if (k.has('stats')) out.stats = Number(raw.prepare('SELECT COUNT(*) AS n FROM srv_spend WHERE checked_at < ?').get(cutoff === FOREVER ? Number.MAX_SAFE_INTEGER : Math.min(Date.parse(cutoff) || 0, now())).n);
+    if (k.has('backups')) out.backups = await R.emptyTrash(cutoff, { dryRun: true });
+    return out;
+  }
+
+  // Auto delete runs nightly (and once soon after a start, so a restart doesn't skip a night): the
+  // hourly check runs it in the 3 o'clock hour (the server's time zone: TZ, zone.mjs) at most once a day.
   let lastDaily = 0;
+  const zone = R.cfg?.timeZone || serverZone();
   async function daily(force = false) {
     if (!R.engine || S.mode !== 'v3') return;
-    if (!force && now() - lastDaily < DAY) return;
+    if (!force && now() - lastDaily < 20 * 3600 * 1000) return;
+    if (!force && lastDaily && hourIn(now(), zone) !== 3 && now() - lastDaily < 26 * 3600 * 1000) return;
     lastDaily = now();
-    const cut = core.keepCutoff(R.house.keepMonths(), now());
+    const cut = R.house.cutoff(now());
     if (cut) await pruneTo(cut);
     const c = R.engine.compact();
     if (c) logLine('log', 'compacted', null, { deletes: c });
+    dropStaleWebFiles();
     writeOwn();
   }
 
@@ -485,7 +719,7 @@ export function makeMerger(R) {
     return { specials: rows, lists: extra.specials?.lists ?? [], catalogues: extra.catalogues ?? {} };
   }
 
-  return { openDb, closeDb, logLine, readLog, moveActivity, queue, settle, mergeEverything, writeOwn, pruneTo, daily, history, stats, specials, raw: () => raw };
+  return { openDb, closeDb, logLine, readLog, moveActivity, queue, settle, mergeEverything, writeOwn, pruneTo, daily, dropStaleWebFiles, history, stats, specials, raw: () => raw };
 }
 
 /** File names under files/ (for the merge and retention), from a directory walk. */

@@ -10,6 +10,8 @@ import { openKeys, makeHouse } from './house.mjs';
 import { makeMerger } from './merge.mjs';
 import { makeWebAuth, SEALED } from './webauth.mjs';
 import { makeHa } from './ha.mjs';
+import { makeData } from './data.mjs';
+import { makeSearch } from './search.mjs';
 import { backupStream } from './backup.mjs';
 import { parseNameV3, canWriteV3, canReadV3, bodyOkV3, reservedDevice, DEVICE } from '../names.mjs';
 import { checkPassphrase } from '../../public/setup/strength.js';
@@ -33,6 +35,8 @@ export async function makeV3(R) {
   R.merger = makeMerger(R);
   R.web = makeWebAuth(R);
   R.ha = makeHa(R);
+  R.data = makeData(R);
+  R.search = makeSearch(R);
   R.openDb = (o) => R.merger.openDb(o);
   R.closeDb = () => R.merger.closeDb();
   R.writeOwn = () => {
@@ -290,12 +294,12 @@ export async function makeV3(R) {
       const b = actor ? input() : R.json(body);
       if (S.mode === 'released') {
         if (b.afresh !== true) needMode('new');
-        await startAfresh(actor?.by ?? 'web');
+        await startAfresh(actor?.by ?? 'web', actor?.hash ?? null);
       } else needMode('new');
       if (!R.sqlite) throw new HttpError(503, 'node', 'Restock server needs Node 22.13 or newer.');
       const name = cleanName(b.name);
       if (!name) throw new HttpError(400, 'name', 'Give the house a name.');
-      await house.create(name, R.origin(req));
+      await house.create(name, R.origin(req), actor?.hash ?? null);
       R.note('set-up', { by: actor?.by ?? 'web', name });
       if (actor) return sealedAnswer(actor, 200, web.gift(actor.session), req, res);
       return R.send(req, res, 200, { ok: true, mode: S.mode, house: { name } });
@@ -417,6 +421,11 @@ export async function makeV3(R) {
         if (!canWriteV3(actor, parsed)) throw new HttpError(403, 'forbidden', actor.type === 'web3' ? 'The web page can only write its own file.' : 'A phone can only write its own files.');
         if (method === 'DELETE') return R.send(req, res, 200, await R.deleteFile(actor, name, parsed));
         if (!bodyOkV3(parsed, body)) throw new HttpError(400, 'sealed', "That isn't a sealed Restock file.");
+        // 0.9.5 (review): a browser's copy of a household that isn't this one (signed in before Delete
+        // everything, or before the server was set up afresh) can't put its records in this one.
+        if (actor.type === 'web3' && parsed.kind === 'sync' && !web.ofThisHouse(actor.session)) {
+          throw new HttpError(409, 'household', "This browser's copy is of a household that's no longer on this server. Sign out, then sign in again.");
+        }
         if (parsed.kind === 'photo' && !photoOk(parsed, body)) throw new HttpError(400, 'photo', "That photo doesn't match its name (or the server can't open it).");
         const out = await R.putFile(actor, name, parsed, body);
         if (parsed.kind === 'sync' || parsed.kind === 'archive') merger.queue(name);
@@ -506,10 +515,11 @@ export async function makeV3(R) {
     }
 
     // ---------- settings ----------
+    const dataCtx = () => ({ req, res, ip, url, path, method, actor, body, input, needWeb, needConfirm, sealedAnswer });
     if (path === '/api/v3/settings') {
       if (method === 'GET') {
         needWeb(actor);
-        return sealedAnswer(actor, 200, { name: S.house.name, keepMonths: house.keepMonths() }, req, res);
+        return sealedAnswer(actor, 200, { name: S.house.name, keepMonths: house.keepMonths(), autoDelete: house.keepMonths(), webSearch: R.search.enabled() }, req, res);
       }
       if (method === 'PUT') {
         needWeb(actor, 'passphrase');
@@ -518,11 +528,13 @@ export async function makeV3(R) {
         // Checked before anything changes (review fix: a name in the same request was saved even
         // when the passphrase was then refused).
         if (b.keepMonths !== undefined) {
-          if (b.keepMonths !== null && !core.KEEP_MONTHS.includes(b.keepMonths)) throw new HttpError(400, 'keepMonths', 'Keep data for 3, 6, 9 or 12 months, or until you delete it.');
-          // Keeping less deletes what's older at once: the passphrase again first.
-          const was = house.keepMonths();
-          if (b.keepMonths !== null && (was === null || b.keepMonths < was)) needConfirm(actor, b, ip, 'keep-less');
+          // 0.9.5: Auto delete's values (off or 1–120 months); turning it on or keeping less deletes
+          // what's older at once: the typed DELETE and the passphrase again first (data.mjs).
+          if (b.keepMonths !== null && typeof b.keepMonths !== 'number') throw new HttpError(400, 'keepMonths', 'Auto delete after 1 to 120 months, or off.');
+          R.data.autoDeleteGate(dataCtx(), b, b.keepMonths);
         }
+        // 0.9.5: "Let the web page search the shops" (search.mjs), on or off.
+        if (b.webSearch !== undefined && typeof b.webSearch !== 'boolean') throw new HttpError(400, 'webSearch', 'Turn Let the web page search the shops on or off.');
         if (b.name !== undefined) {
           const name = cleanName(b.name);
           if (!name) throw new HttpError(400, 'name', 'Give the house a name.');
@@ -535,15 +547,27 @@ export async function makeV3(R) {
           S.settings.keepMonths = b.keepMonths;
           house.refreshServerRow();
         }
+        const searchWas = R.search.enabled();
+        if (b.webSearch !== undefined) R.search.setEnabled(b.webSearch);
         await R.st.save();
         R.writeOwn();
         R.note('settings-changed', { by: actor.by, keepMonths: house.keepMonths() });
+        if (R.search.enabled() !== searchWas) R.note(R.search.enabled() ? 'web-search-on' : 'web-search-off', { by: actor.by });
         if (prune) {
-          const cut = core.keepCutoff(house.keepMonths(), now());
+          const cut = house.cutoff(now());
           if (cut) await merger.pruneTo(cut);
         }
-        return sealedAnswer(actor, 200, { name: S.house.name, keepMonths: house.keepMonths() }, req, res);
+        return sealedAnswer(actor, 200, { name: S.house.name, keepMonths: house.keepMonths(), autoDelete: house.keepMonths(), webSearch: R.search.enabled() }, req, res);
       }
+    }
+    // ---------- 0.9.5: Let the web page search the shops (search.mjs) ----------
+    if (path === '/api/v3/search' && method === 'POST') {
+      needWeb(actor);
+      return sealedAnswer(actor, 200, await R.search.search(actor, input()), req, res);
+    }
+    if (path === '/api/v3/search/add' && method === 'POST') {
+      needWeb(actor);
+      return sealedAnswer(actor, 200, R.search.add(actor, input()), req, res);
     }
     if (path === '/api/v3/prune' && method === 'POST') {
       needWeb(actor, 'passphrase');
@@ -551,7 +575,9 @@ export async function makeV3(R) {
       const t = Date.parse(String(b.before ?? ''));
       if (!Number.isFinite(t) || t > now()) throw new HttpError(400, 'before', 'Pick a date in the past.');
       needConfirm(actor, b, ip, 'prune');
-      const out = await merger.pruneTo(new Date(t).toISOString(), 'deleted-older');
+      // 0.9.5 (review): what it meant on 0.9.4: prices, receipts (and their photos and archive months)
+      // and logs. Never the statistics (srv_spend: POST /api/v3/data/delete, with its typed word).
+      const out = await merger.pruneTo(new Date(t).toISOString(), 'deleted-older', ['prices', 'receipts', 'logs']);
       R.note('pruned', { by: actor.by, before: new Date(t).toISOString() });
       return sealedAnswer(actor, 200, out, req, res);
     }
@@ -663,6 +689,9 @@ export async function makeV3(R) {
       needWeb(actor);
       return sealedAnswer(actor, 200, merger.specials(), req, res);
     }
+
+    // ---------- 0.9.5: the Data tab (data.mjs) ----------
+    if (path.startsWith('/api/v3/data/')) return R.data.api(dataCtx());
 
     throw new HttpError(404, 'not-found', 'Not found.');
   }
@@ -817,8 +846,10 @@ export async function makeV3(R) {
 
   // ---------- starting afresh (after the household was taken back) ----------
 
-  async function startAfresh(by) {
+  async function startAfresh(by, keep) {
     R.closeDb();
+    // 0.9.5 (review): as Delete everything: the other browsers' copies are of the household that's gone.
+    web.endAllBut(keep);
     for (const name of R.listFileNames()) await R.trashFile(name, by, 'started afresh');
     for (const f of ['household.db', 'household.db-wal', 'household.db-shm']) await fs.rm(join(R.DATA, f), { force: true });
     R.keys.clearHouse();

@@ -1,0 +1,66 @@
+name: Server won't start
+description: The container or Home Assistant app stops, restarts, or the web page won't open
+labels: [startup]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The logs usually say why: `docker logs restock-server` (or the Home Assistant app's Log tab).
+        Please leave out your passphrase, `RESTOCK_PASSWORD`, recovery key, addresses and anything else personal.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What's going wrong?
+      options:
+        - The container or app stops or keeps restarting
+        - It starts, but the web page won't open
+        - The web page says "web app not built" or the core is missing
+        - I can't log in or set the passphrase
+        - It started after an update, but something is missing
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Restock server version
+      description: The image tag you run (for example `ghcr.io/d-plenty/restock-server:0.9.5`), or the Home Assistant app's version.
+      placeholder: 0.9.5
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run it?
+      options:
+        - docker run
+        - Docker Compose
+        - Dockge
+        - Portainer
+        - TrueNAS
+        - Synology, QNAP or Unraid
+        - Home Assistant app
+        - Without Docker (node)
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: machine
+    attributes:
+      label: The machine
+      description: What it runs on, and whether the data is a Docker volume or a folder or dataset.
+      placeholder: Raspberry Pi 5, Raspberry Pi OS 64-bit, restock-data volume
+  - type: textarea
+    id: logs
+    attributes:
+      label: The logs
+      description: The last 30 lines or so of `docker logs restock-server` (or the app's Log tab).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Your compose file or docker run command
+      description: With RESTOCK_PASSWORD and any addresses taken out.
+      render: yaml

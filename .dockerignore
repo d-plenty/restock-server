@@ -6,3 +6,4 @@ test
 *.md
 compose.yaml
 public/app/**/*.map
+docs

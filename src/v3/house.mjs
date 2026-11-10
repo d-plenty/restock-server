@@ -13,6 +13,8 @@ const b64u = (b) => Buffer.from(b).toString('base64url');
 const DAY = 24 * 3600 * 1000;
 const OLD_KEY_LIFE_MS = 60 * DAY; // SyncHousehold.OLD_KEY_LIFE_MS
 export const SERVER_MEMBER_NAME = 'Restock server';
+/** 0.9.5: Auto delete's months: a whole number 1–120 (null is off). */
+export const autoDeleteOk = (m) => Number.isInteger(m) && m >= 1 && m <= 120;
 const ALL_TABS = 'pantry,keg,pharmacy';
 
 /** A P-256 ECDH key pair for the server: raw private key and SPKI public key, base64url. */
@@ -76,11 +78,26 @@ export function makeHouse(R) {
   function away() {
     return R.cfg.awayUrl || S.house?.away || null;
   }
+  /**
+   * Auto delete (0.9.5; 0.9.4's "Keep data for", same stored key settings.keepMonths): null (off) or a
+   * whole number of months 1–120. A value that isn't one (a damaged state.json) stays 0.9.4's 12.
+   */
   function keepMonths() {
     const k = S.settings?.keepMonths;
-    return k === null ? null : core.KEEP_MONTHS.includes(k) ? k : 12;
+    return k === null ? null : autoDeleteOk(k) ? k : 12;
   }
-  const serverRowValue = () => JSON.stringify({ v: 3, sid: sid(), home: home(), away: away(), kex: kexPub(), keepMonths: keepMonths() });
+  /** The Auto delete cut-off now (keepCutoff's arithmetic, for any whole number of months), or null. */
+  function cutoff(t = now()) {
+    const k = keepMonths();
+    return k === null ? null : new Date(t - k * core.MONTH_MS).toISOString();
+  }
+  // 0.9.5: `resend` (ms) is "Ask phones to resend": 0.9.5 phones resend everything once per new value;
+  // 0.9.4 phones' parseServerRow passes over the extra field.
+  const serverRowValue = () => {
+    const row = { v: 3, sid: sid(), home: home(), away: away(), kex: kexPub(), keepMonths: keepMonths() };
+    if (Number.isFinite(S.house?.resendAt)) row.resend = S.house.resendAt;
+    return JSON.stringify(row);
+  };
 
   /** The recovery copy (0.9.0's format), sealed with the recovery key. */
   function recoveryRow() {
@@ -158,12 +175,16 @@ export function makeHouse(R) {
   }
 
   /** Set up this server: a new household with the server as its owner (SyncHousehold.create's rows). */
-  async function create(name, origin) {
+  async function create(name, origin, by) {
     newHouseholdKeys();
     keys.save();
     S.house = { name, home: R.cfg.homeUrl || origin || '', away: R.cfg.awayUrl || null, created: new Date(now()).toISOString(), seeded: false };
+    // 0.9.5 (review): the browsers signed in with no household yet (and the one setting it up) are of this one.
+    R.web?.joinHouse(by);
     await R.openDb({ fresh: true });
     signHouseRows(name);
+    // 0.9.5: what was noted while there was no household.db (Delete everything on this server) goes in srv_log.
+    R.moveActivity();
     S.mode = 'v3';
     await R.st.save();
     R.writeOwn();
@@ -400,6 +421,7 @@ export function makeHouse(R) {
     crash('after-keys');
     // (b): every sync file and archive, read as a new device, then the server's own changes.
     S.house = { name: c.name, home: R.cfg.homeUrl || S.house?.home || '', away: R.cfg.awayUrl || null, created: new Date(now()).toISOString(), seeded: true };
+    R.web?.joinHouse(null);
     await R.openDb({ fresh: true, name: c.name, ownerPub: c.ownerPub });
     R.mergeEverything({ first: 'restock-sync-' + sender + '.bin' });
     const e = R.engine;
@@ -471,6 +493,10 @@ export function makeHouse(R) {
     // Its tabs and receipts come with its owner phone's file; widened only once that's in and every
     // member is on 0.9.4 (widen).
     S.house = { ...(S.house ?? {}), name, seeded: true, narrow: { since: new Date(now()).toISOString(), waitFor: device } };
+    // 0.9.5 (review): another household now (its own id); the browsers signed in to the empty one carry
+    // on with it (each drops its copy of the empty one: its owner key changed, live.ts).
+    delete S.house.id;
+    R.web?.joinHouse(null, true);
     await R.openDb({ fresh: true, name, ownerPub: c.ownerPub });
     signHouseRows(name, { wide: false });
     R.mergeEverything({});
@@ -519,6 +545,7 @@ export function makeHouse(R) {
     home,
     away,
     keepMonths,
+    cutoff,
     currentKey,
     memberRow,
     signMember,

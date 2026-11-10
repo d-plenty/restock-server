@@ -1,0 +1,57 @@
+name: Sync problem
+description: A phone can't join, can't reach the server, or something doesn't sync through it
+labels: [sync]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please leave out QR codes, your passphrase, recovery key, backup files, addresses and anything else personal.
+        Phones syncing straight to each other on Wi-Fi, with no server? Please use Restock's [Local sync problem](https://github.com/d-plenty/Restock/issues/new?template=sync.yml) form instead.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What's going wrong?
+      options:
+        - A phone can't join (the code doesn't work)
+        - A phone can't reach the server, at home or away
+        - Something doesn't sync, or syncs wrongly
+        - Home Assistant's list doesn't match
+        - Restock on iPhone (the web app on the home screen)
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Any message the phone or the web page showed helps.
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Restock server version
+      placeholder: 0.9.5
+    validations:
+      required: true
+  - type: textarea
+    id: phones
+    attributes:
+      label: The phones
+      description: For each phone, the Restock version (Settings, at the very bottom), the phone and Android version (or iPhone), and what it shares.
+      placeholder: |
+        Restock 0.9.5, Pixel 8, Android 16, shares groceries and Keg
+        Restock 0.9.4, Galaxy S23, Android 15, shares groceries
+    validations:
+      required: true
+  - type: input
+    id: network
+    attributes:
+      label: How phones reach the server
+      description: At home and away. Leave out the addresses themselves.
+      placeholder: http at home, Tailscale away; or a Cloudflare Tunnel
+  - type: textarea
+    id: shots
+    attributes:
+      label: Screenshots or logs
+      description: The phone's server screen, the web page's Server and phones or Activity page, or `docker logs restock-server`. Crop out anything private.

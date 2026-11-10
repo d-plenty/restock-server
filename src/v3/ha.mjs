@@ -1,7 +1,8 @@
 // 0.9.4 (protocol v3): Home Assistant on the server (D12). The core's syncRound (haSync.ts, the same
 // code the phones run) against Home Assistant's REST API, 24/7: every 60 seconds and 4 seconds after a
 // merge that changed the groceries list. Restock's side is a Store over household.db (the Pantry tab's
-// lines and items, aliases from household_settings, the pairing in kv), written through the triggers
+// and General's lines, 0.9.5: items of every shared tab, so a voice add goes to the list of what it
+// matches and to General when nothing does; aliases from household_settings, the pairing in kv), written through the triggers
 // as srv-<sid>, so the changes reach phones in the server's own file.
 // The token is in keys.json only: never in an answer, the log or an error (requests carry it, nothing
 // else does). docs/server-v3-design.md section 9.
@@ -101,18 +102,24 @@ export function makeHa(R) {
   function store() {
     const db = raw();
     const entity = K.ha.entity;
-    const pantryItems = () => db.prepare("SELECT id, name FROM items WHERE COALESCE(section, 'pantry') = 'pantry'").all();
+    // 0.9.5: the items of every tab the household shares (the server only has those), with their tab.
+    const tabs = () => R.engine?.householdTabs() ?? new Set(['pantry']);
+    const allItems = () => db.prepare('SELECT id, name, section FROM items').all();
     return {
       async lines() {
-        const groups = new Map(db.prepare('SELECT id, section FROM items').all().map((g) => [g.id, g.section ?? 'pantry']));
+        // 0.9.5: the grocery list's and General's, and lines made from Home Assistant's list (core.onHaList).
+        const groups = new Map(allItems().map((g) => [g.id, g.section ?? 'pantry']));
         return db
           .prepare('SELECT id, text, item_id, section, checked, qty FROM list_entries')
           .all()
-          .filter((e) => ((e.item_id ? groups.get(e.item_id) : undefined) ?? e.section ?? 'pantry') === 'pantry')
+          .filter((e) => core.onHaList(e.id, (e.item_id ? groups.get(e.item_id) : undefined) ?? e.section ?? 'pantry'))
           .map((e) => ({ id: e.id, text: e.text, qty: Math.max(1, Number(e.qty ?? 1)), checked: Number(e.checked) !== 0, groupId: e.item_id ?? undefined }));
       },
       async items() {
-        return pantryItems().map((g) => ({ id: g.id, name: g.name }));
+        const on = tabs();
+        return allItems()
+          .filter((g) => on.has(g.section ?? 'pantry') || (g.section ?? 'pantry') === 'pantry')
+          .map((g) => ({ id: g.id, name: g.name, section: g.section ?? 'pantry' }));
       },
       async aliases() {
         const out = {};
@@ -130,7 +137,7 @@ export function makeHa(R) {
       },
       async addLine(l, uid) {
         const id = uid ? core.haLineId(entity, uid) : 'ha-' + randomUUID();
-        db.prepare('INSERT OR IGNORE INTO list_entries (id, text, item_id, section, checked, qty, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, l.text, l.groupId ?? null, 'pantry', l.checked ? 1 : 0, l.qty, new Date(now()).toISOString());
+        db.prepare('INSERT OR IGNORE INTO list_entries (id, text, item_id, section, checked, qty, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, l.text, l.groupId ?? null, l.section ?? 'pantry', l.checked ? 1 : 0, l.qty, new Date(now()).toISOString());
         return id;
       },
       async updateLine(id, patch) {
