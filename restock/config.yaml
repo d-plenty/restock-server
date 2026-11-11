@@ -2,7 +2,7 @@
 # It's the same server as the Docker image; this only wraps it. Keep version in step with
 # package.json (the image tag below must exist on ghcr.io).
 name: Restock server
-version: "0.9.5"
+version: "0.9.6"
 slug: restock_server
 description: Your own server for a Restock household: sync at home and away, price history, Home Assistant and the web app
 url: https://github.com/d-plenty/restock-server

@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { AUTO_KINDS, FOREVER } from './merge.mjs';
 import { autoDeleteOk } from './house.mjs';
 import { dayIn, monthIn, serverZone, wallTime } from '../zone.mjs';
+import { makeImport, NEVER_SHOP } from './import.mjs';
 
 const DAY = 24 * 3600 * 1000;
 /** An untick within this long of the tick takes the purchase back (it was a mis-tap or not bought). */
@@ -73,6 +74,8 @@ export function makeData(R) {
   const localMonth = (ms) => monthIn(ms, ZONE);
   const db = () => R.merger.raw();
   const iso = (t = now()) => new Date(t).toISOString();
+  /** 0.9.6: Import (import.mjs). */
+  const importer = makeImport(R, { zone: ZONE, now });
 
   // ---------- prices and the usual price ----------
 
@@ -451,7 +454,7 @@ export function makeData(R) {
     const saved = raw
       .prepare('SELECT COUNT(*) AS n, COALESCE(SUM((usual - price) * qty), 0) AS s FROM srv_spend WHERE checked_at >= ? AND price IS NOT NULL AND usual IS NOT NULL AND usual > price')
       .get(p.fromMs);
-    const prices = raw.prepare("SELECT COUNT(*) AS n, MIN(date) AS first FROM prices WHERE source <> 'demo'").get();
+    const prices = raw.prepare("SELECT COUNT(*) AS n, MIN(date) AS first, SUM(CASE WHEN source = 'imported' THEN 1 ELSE 0 END) AS imported FROM prices WHERE source <> 'demo'").get();
     const inPeriod = raw.prepare("SELECT COUNT(*) AS n, COUNT(DISTINCT product_id) AS products FROM prices WHERE source <> 'demo' AND date >= ?").get(p.fromMs ? iso(p.fromMs) : '');
     return {
       period: p.period,
@@ -463,7 +466,7 @@ export function makeData(R) {
       saved: { total: round2(Number(saved.s)), count: Number(saved.n) },
       itemsTracked: Number(raw.prepare("SELECT COUNT(*) AS n FROM items WHERE id NOT LIKE 'demo-%'").get().n),
       productsTracked: Number(inPeriod.products),
-      prices: { count: Number(prices.n), first: prices.first ?? null, inPeriod: Number(inPeriod.n) },
+      prices: { count: Number(prices.n), first: prices.first ?? null, inPeriod: Number(inPeriod.n), imported: Number(prices.imported ?? 0) },
       top: top(periodV, 0, LIMITS.topDefault),
     };
   }
@@ -485,10 +488,12 @@ export function makeData(R) {
     const cells = new Map();
     const fromIso = p.fromMs ? iso(p.fromMs) : '';
     for (const c of use) {
-      for (const r of raw.prepare("SELECT date, price, is_special FROM prices WHERE product_id = ? AND date >= ? AND source <> 'demo' ORDER BY date").all(c.id, fromIso)) {
+      for (const r of raw.prepare("SELECT date, price, is_special, source FROM prices WHERE product_id = ? AND date >= ? AND source <> 'demo' ORDER BY date").all(c.id, fromIso)) {
         const k = weekOf(r.date, ZONE) + '|' + c.chain;
         const had = cells.get(k);
-        if (!had || Number(r.price) < had.price) cells.set(k, { week: weekOf(r.date, ZONE), chain: c.chain, price: round2(Number(r.price)), special: !!Number(r.is_special) });
+        // 0.9.6: `imported` when that week's price came from an import (the Data tab tags it).
+        if (!had || Number(r.price) < had.price)
+          cells.set(k, { week: weekOf(r.date, ZONE), chain: c.chain, price: round2(Number(r.price)), special: !!Number(r.is_special), ...(r.source === 'imported' ? { imported: true } : {}) });
       }
     }
     const weeks = [...cells.values()].sort((a, b) => a.week.localeCompare(b.week) || a.chain.localeCompare(b.chain)).slice(-LIMITS.seriesWeeks * 8);
@@ -521,7 +526,7 @@ export function makeData(R) {
     const archives = files.filter((f) => f.name.startsWith('archive/'));
     const photos = files.filter((f) => f.name.startsWith('photos/'));
     const sumOf = (l) => l.reduce((s, f) => s + f.size, 0);
-    const pr = raw.prepare("SELECT COUNT(*) AS n, MIN(date) AS oldest, COUNT(DISTINCT product_id) AS products FROM prices WHERE source <> 'demo'").get();
+    const pr = raw.prepare("SELECT COUNT(*) AS n, MIN(date) AS oldest, COUNT(DISTINCT product_id) AS products, SUM(CASE WHEN source = 'imported' THEN 1 ELSE 0 END) AS imported FROM prices WHERE source <> 'demo'").get();
     const rc = raw.prepare("SELECT COUNT(*) AS n, MIN(scanned_at) AS oldest, SUM(pinned) AS pinned FROM receipts WHERE id NOT LIKE 'demo-%'").get();
     const sp = raw.prepare('SELECT COUNT(*) AS n, MIN(checked_at) AS oldest FROM srv_spend').get();
     const lg = raw.prepare("SELECT COUNT(*) AS n, MIN(at) AS oldest, SUM(CASE WHEN kind = 'activity' THEN 1 ELSE 0 END) AS activity FROM srv_log").get();
@@ -530,6 +535,7 @@ export function makeData(R) {
       prices: {
         count: Number(pr.n),
         products: Number(pr.products),
+        imported: Number(pr.imported ?? 0),
         archives: archives.length,
         oldest: pr.oldest ?? null,
         bytes: bytesOf(['prices', 'prices_product_date'], "SELECT SUM(60 + length(product_id) + length(date) + COALESCE(length(promo), 0)) AS b FROM prices") + sumOf(archives),
@@ -572,6 +578,16 @@ export function makeData(R) {
 
   // ---------- the export (restock-export v1) ----------
 
+  /** 0.9.6: prices whose product isn't Costco's (bind NEVER_SHOP). */
+  const NOT_COSTCO = 'NOT EXISTS (SELECT 1 FROM products q WHERE q.id = prices.product_id AND q.chain = ?)';
+  /** A list line at Costco without its price (and without the shop's unit price text). */
+  function noCostcoLine(r) {
+    const p = r.product && typeof r.product === 'object' ? r.product : null;
+    if (r.chain !== NEVER_SHOP && p?.chain !== NEVER_SHOP) return r;
+    const product = p ? Object.fromEntries(Object.entries(p).filter(([k]) => !/price|unit/i.test(k))) : p;
+    return { ...r, price: null, product };
+  }
+
   function capped(sql, args, out, name) {
     const rows = db().prepare(sql + ' LIMIT ?').all(...args, LIMITS.tableRows + 1).map((r) => ({ ...r }));
     if (rows.length > LIMITS.tableRows) {
@@ -590,9 +606,10 @@ export function makeData(R) {
       alt_product_ids: ids(r.alt_product_ids),
       not_at: jsonOr(r.not_at, r.not_at ?? null),
     }));
-    const products = capped("SELECT id, chain, name, brand, size, barcode, store_product_id, image_url, qty, qty_unit, created_at FROM products WHERE id NOT LIKE 'demo-%' ORDER BY id", [], out, 'products');
+    // 0.9.6: never Costco's products or prices (Declan, 11 Nov 2026): left out, and counted in `withheld`.
+    const products = capped("SELECT id, chain, name, brand, size, barcode, store_product_id, image_url, qty, qty_unit, created_at FROM products WHERE id NOT LIKE 'demo-%' AND chain <> ? ORDER BY id", [NEVER_SHOP], out, 'products');
     const categories = capped('SELECT * FROM categories ORDER BY section, ord, id', [], out, 'categories');
-    const list = capped("SELECT * FROM list_entries WHERE id NOT LIKE 'demo-%' ORDER BY created_at, id", [], out, 'list').map((r) => ({ ...r, product: jsonOr(r.product, null) }));
+    const list = capped("SELECT * FROM list_entries WHERE id NOT LIKE 'demo-%' ORDER BY created_at, id", [], out, 'list').map((r) => noCostcoLine({ ...r, product: jsonOr(r.product, null) }));
     const receipts = capped("SELECT id, scanned_at, shop, chain, receipt_date, total, section, note, pinned, photo, pages FROM receipts WHERE id NOT LIKE 'demo-%' ORDER BY scanned_at, id", [], out, 'receipts').map((r) => {
       const pages = jsonOr(r.pages, null);
       const n = (r.photo ? 1 : 0) + (Array.isArray(pages) ? pages.length : pages && typeof pages === 'object' ? Object.keys(pages).length : 0);
@@ -625,8 +642,12 @@ export function makeData(R) {
       } else settings[r.k] = v;
     }
     const counts = {
-      prices: Number(raw.prepare("SELECT COUNT(*) AS n FROM prices WHERE source <> 'demo'").get().n),
+      prices: Number(raw.prepare(`SELECT COUNT(*) AS n FROM prices WHERE source <> 'demo' AND ${NOT_COSTCO}`).get(NEVER_SHOP).n),
       ticked: Number(raw.prepare('SELECT COUNT(*) AS n FROM srv_spend').get().n),
+    };
+    const costco = {
+      products: Number(raw.prepare('SELECT COUNT(*) AS n FROM products WHERE chain = ?').get(NEVER_SHOP).n),
+      prices: Number(raw.prepare("SELECT COUNT(*) AS n FROM prices p JOIN products q ON q.id = p.product_id WHERE q.chain = ? AND p.source <> 'demo'").get(NEVER_SHOP).n),
     };
     return {
       format: 'restock-export',
@@ -642,6 +663,7 @@ export function makeData(R) {
         ticked: { count: counts.ticked, path: '/api/v3/data/export/ticked', limit: LIMITS.pageDefault },
       },
       truncated: out.truncated,
+      ...(costco.products || costco.prices ? { withheld: { costco } } : {}),
     };
   }
 
@@ -650,11 +672,15 @@ export function makeData(R) {
     const limit = Math.min(LIMITS.pageRows, Math.max(1, Math.trunc(Number(limitV)) || LIMITS.pageDefault));
     let rows;
     if (table === 'prices') {
-      rows = db().prepare("SELECT id, product_id, date, price, was_price, is_special, member_only, promo, source FROM prices WHERE id > ? AND source <> 'demo' ORDER BY id LIMIT ?").all(after, limit);
+      rows = db()
+        .prepare(`SELECT id, product_id, date, price, was_price, is_special, member_only, promo, source FROM prices WHERE id > ? AND source <> 'demo' AND ${NOT_COSTCO} ORDER BY id LIMIT ?`)
+        .all(after, NEVER_SHOP, limit);
     } else {
       rows = db()
         .prepare('SELECT rowid AS id, entry_id, checked_at, at, chain, section, item_id, product_id, text, qty, price, total, usual, special, src FROM srv_spend WHERE rowid > ? ORDER BY rowid LIMIT ?')
-        .all(after, limit);
+        .all(after, limit)
+        // 0.9.6: what was paid at Costco is a Costco price: the purchase stays, its prices don't.
+        .map((r) => (r.chain === NEVER_SHOP ? { ...r, price: null, total: null, usual: null, special: 0 } : r));
     }
     rows = rows.map((r) => ({ ...r }));
     return { table, rows, next: rows.length === limit ? rows[rows.length - 1].id : null };
@@ -719,6 +745,7 @@ export function makeData(R) {
   async function deleteEverything(by, keep = null) {
     const phones = Object.keys(S.devices);
     R.ha?.stop();
+    importer.forget();
     R.closeDb();
     for (const name of R.listFileNames()) await R.trashFile(name, by, 'deleted everything');
     await R.emptyTrash(null);
@@ -768,6 +795,7 @@ export function makeData(R) {
     const q = (k) => url.searchParams.get(k);
     const answer = (obj) => c.sealedAnswer(actor, 200, obj, c.req, c.res);
     let m;
+    if (path.startsWith('/api/v3/data/import/')) return importer.api(c);
     if (path === '/api/v3/data/summary' && method === 'GET') {
       c.needWeb(actor);
       return answer(await summary());
@@ -846,7 +874,7 @@ export function makeData(R) {
     throw new HttpError(404, 'not-found', 'Not found.');
   }
 
-  return { api, sweep, recount, stats, top, series, summary, exportAll, exportPage, deleteKinds, deleteEverything, resend, autoDeleteGate, setAutoDelete, priceFor, usualOf };
+  return { api, sweep, recount, stats, top, series, summary, exportAll, exportPage, deleteKinds, deleteEverything, resend, autoDeleteGate, setAutoDelete, priceFor, usualOf, importer, importing: () => importer.current() };
 }
 
 export { AUTO_KINDS };
