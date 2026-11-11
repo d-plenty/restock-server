@@ -56,7 +56,8 @@ export const IMPORT_LIMITS = {
 };
 
 /** The shop id never imported or exported (Declan, 11 Nov 2026). */
-export const NEVER_SHOP = 'costco';
+// 0.9.7: Costco's prices are imported and exported like any shop's: no shop is left out any more.
+export const NEVER_SHOP = '\u0000';
 const CHAIN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const REF = /^[A-Za-z0-9_.:-]{1,80}$/;
 const PRODUCT_KEYS = new Set(['ref', 'chain', 'store_product_id', 'barcode', 'name', 'brand', 'size', 'image_url', 'qty', 'qty_unit', 'more', 'prices']);

@@ -14,7 +14,7 @@ It takes:
 Spreadsheets (.xlsx) can't be imported: save the CSV files or the JSON file instead.
 
 Only import prices you're allowed to use. Shops' websites have terms of use, and some don't allow collecting
-their prices with automated tools. Restock doesn't fetch shops for you here, and never imports Costco prices.
+their prices with automated tools. Restock doesn't fetch shops for you here.
 
 ## How it goes
 
@@ -67,7 +67,7 @@ in one file.
 
 | Field | Needed | What it is |
 | --- | --- | --- |
-| `chain` | yes | The shop's id: `woolworths`, `coles`, `aldi`, a bottle shop or chemist Restock knows (`danmurphys`, `bws`, `chemistwarehouse`, `priceline` and the others in Settings), or a shop your household added. Not `other`. Never `costco`. |
+| `chain` | yes | The shop's id: `woolworths`, `coles`, `aldi`, a bottle shop or chemist Restock knows (`danmurphys`, `bws`, `chemistwarehouse`, `priceline` and the others in Settings), or a shop your household added. `costco` too (0.9.7). Not `other`. |
 | `name` | yes | Up to 200 characters. |
 | `id` | for prices in a `prices` table | Your own id for the product in this file (up to 80 letters, digits, `_ . : -`). A new product keeps it as its id on the server when it's free. |
 | `store_product_id` | best | The shop's own product number (Woolworths stockcode, Coles id, Aldi sku). Up to 100 characters. |

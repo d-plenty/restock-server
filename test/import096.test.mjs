@@ -94,11 +94,12 @@ describe('import: the dry run, then the import', () => {
     const dry = await t.web.post('/api/v3/data/import/check', { products: chunk() });
     assert.equal(dry.status, 200, JSON.stringify(dry.body));
     assert.equal(dry.sealed, true);
-    assert.deepEqual(dry.body.products, { add: 2, matched: 1 });
+    assert.deepEqual(dry.body.products, { add: 3, matched: 1 });
     // Milk: 2 added, 1 skipped. Bread: the day-10 pair is one (the noon one is newer), plus yesterday's: 2
     // added, 1 skipped. Biscuits: 1.
-    assert.deepEqual(dry.body.prices, { add: 5, skipped: 2 });
-    assert.deepEqual(dry.body.costco, { products: 1, prices: 2 });
+    // 0.9.7: Costco's nuts too (2).
+    assert.deepEqual(dry.body.prices, { add: 7, skipped: 2 });
+    assert.deepEqual(dry.body.costco, { products: 0, prices: 0 }); // 0.9.7: Costco is imported like any shop
     assert.equal(dry.body.problems.shop, 1);
     assert.equal(dry.body.problems.date, 2);
     assert.equal(dry.body.problems.price, 1);
@@ -109,13 +110,13 @@ describe('import: the dry run, then the import', () => {
     const id = await startImport(t);
     const c = await t.web.post('/api/v3/data/import/chunk', { import: id, n: 0, products: chunk() });
     assert.equal(c.status, 200, JSON.stringify(c.body));
-    assert.deepEqual(c.body.products, { added: 2, matched: 1 });
-    assert.equal(c.body.prices.added, 5);
+    assert.deepEqual(c.body.products, { added: 3, matched: 1 });
+    assert.equal(c.body.prices.added, 7);
     assert.equal(c.body.prices.skipped, 2);
     const done = await t.web.post('/api/v3/data/import/finish', { import: id });
     assert.equal(done.status, 200);
     assert.equal(done.body.how, 'finished');
-    assert.equal(done.body.prices.added, 5);
+    assert.equal(done.body.prices.added, 7);
 
     // Never the list or the pantry; what was there stays as it was.
     assert.deepEqual(kept(t), before);
@@ -123,28 +124,28 @@ describe('import: the dry run, then the import', () => {
     assert.equal(bread.id, 'f-bread', "the file's id when the server has none like it");
     assert.deepEqual([bread.chain, bread.name, bread.brand, bread.size, bread.barcode, bread.qty, bread.qty_unit, bread.image_url], ['woolworths', 'Wholemeal Bread 700g', 'Tip Top', '700g', '9310055536333', 700, 'g', null]);
     const imported = rows(t, "SELECT product_id, date, price, is_special, was_price FROM prices WHERE source = 'imported' ORDER BY product_id, date");
-    assert.equal(imported.length, 5);
+    assert.equal(imported.length, 7);
     assert.equal(rows(t, "SELECT COUNT(*) AS n FROM prices WHERE source <> 'imported' AND source <> 'auto'")[0].n, 0);
     const milkSpecial = imported.find((r) => r.product_id === 'p-milk' && r.price === 3.2);
     assert.deepEqual([milkSpecial.is_special, milkSpecial.was_price], [1, 3.6]);
     // The day-10 pair: the newer one (noon in the server's zone, a day alone) is the one kept.
     assert.deepEqual(imported.filter((r) => r.product_id === 'f-bread').map((r) => r.price), [4, 4.5]);
-    // Costco never.
-    assert.equal(rows(t, "SELECT COUNT(*) AS n FROM products WHERE chain = 'costco'")[0].n, 0);
+    // 0.9.7: Costco like any shop.
+    assert.equal(rows(t, "SELECT COUNT(*) AS n FROM products WHERE chain = 'costco'")[0].n, 1);
     // The activity says who.
     const act = rows(t, "SELECT device, detail FROM srv_log WHERE kind = 'activity' AND what = 'data-imported'");
     assert.equal(act.length, 1);
     assert.match(String(act[0].device), /^web-/);
-    assert.match(String(act[0].detail), /"costco":3/);
+    assert.match(String(act[0].detail), /"costco":0/);
 
     // The same file again: nothing more.
     const id2 = await startImport(t);
     const again = await t.web.post('/api/v3/data/import/chunk', { import: id2, n: 0, products: chunk() });
-    assert.deepEqual(again.body.products, { added: 0, matched: 3 });
+    assert.deepEqual(again.body.products, { added: 0, matched: 4 });
     assert.equal(again.body.prices.added, 0);
-    assert.equal(again.body.prices.skipped, 7);
+    assert.equal(again.body.prices.skipped, 9);
     await t.web.post('/api/v3/data/import/finish', { import: id2 });
-    assert.equal(rows(t, "SELECT COUNT(*) AS n FROM prices WHERE source = 'imported'")[0].n, 5);
+    assert.equal(rows(t, "SELECT COUNT(*) AS n FROM prices WHERE source = 'imported'")[0].n, 7);
   });
 
   test('a price difference on a day the server has: the newest wins (an older one is skipped, a newer one added)', async () => {
@@ -180,7 +181,7 @@ describe('import: the dry run, then the import', () => {
     // biscuits' only price is over a year old: neither goes.
     assert.deepEqual(
       prices.map((x) => [x.row.product_id, x.row.price]),
-      [['f-bread', 4.5]],
+      [['f-bread', 4.5], ['f-c', 20]],
     );
     assert.ok(prices.every((x) => x.device === 'srv-' + t.sid && /^web-/.test(x.origin ?? '')));
     // Nothing the phones don't know: products and prices as any server's, with source "imported".
@@ -302,31 +303,18 @@ describe('import: who may, and the checks', () => {
   });
 });
 
-describe('Costco never goes out in an export; the Data tab counts imported prices', () => {
-  test('the export leaves Costco products and prices out, and the price of what was bought there', async () => {
+describe('Costco in the export (0.9.7); the Data tab counts imported prices', () => {
+  test('0.9.7: the export has Costco products and prices like any shop', async () => {
     const { t } = await withPhone();
-    const tick = Date.now() - 3600_000;
-    // 0.9.6 phones never send Costco's records (engine LOCAL_TAB), but a server could hold some from
-    // before: put in directly.
     const raw = t.R.merger.raw();
     raw.prepare("INSERT INTO products (id, chain, name, created_at) VALUES ('p-cc', 'costco', 'Nuts 1kg', 'x')").run();
     raw.prepare("INSERT INTO prices (product_id, date, price, source) VALUES ('p-cc', ?, 19.99, 'auto')").run(isoAgo(1));
-    raw
-      .prepare("INSERT INTO list_entries (id, text, chain, qty, price, section, product, checked, created_at, checked_at) VALUES ('l-cc', 'Nuts', 'costco', 1, 19.99, 'pantry', ?, 1, 'x', ?)")
-      .run(JSON.stringify({ chain: 'costco', name: 'Nuts', unitText: '$2.00 per 100 g' }), tick);
     t.R.data.sweep();
     const e = (await t.web.get('/api/v3/data/export')).body;
-    assert.ok(!e.tables.products.some((p) => p.chain === 'costco'));
-    assert.deepEqual(e.withheld, { costco: { products: 1, prices: 1 } });
-    const l = e.tables.list.find((x) => x.id === 'l-cc');
-    assert.equal(l.price, null);
-    assert.equal(l.product.unitText, undefined);
+    assert.ok(e.tables.products.some((p) => p.chain === 'costco'));
+    assert.equal(e.withheld?.costco, undefined);
     const prices = (await t.web.get('/api/v3/data/export/prices?limit=10000')).body.rows;
-    assert.ok(!prices.some((r) => r.product_id === 'p-cc'));
-    assert.equal(e.paged.prices.count, prices.length);
-    const ticked = (await t.web.get('/api/v3/data/export/ticked')).body.rows.find((r) => r.entry_id === 'l-cc');
-    assert.deepEqual([ticked.price, ticked.total, ticked.usual], [null, null, null]);
-    assert.ok(!JSON.stringify([e.tables.products, e.tables.list, prices]).includes('19.99'));
+    assert.ok(prices.some((r) => r.product_id === 'p-cc' && r.price === 19.99));
   });
 
   test('summary and stats count imported prices; the price chart says which weeks were imported', async () => {
@@ -335,9 +323,9 @@ describe('Costco never goes out in an export; the Data tab counts imported price
     await t.web.post('/api/v3/data/import/chunk', { import: id, n: 0, products: chunk() });
     await t.web.post('/api/v3/data/import/finish', { import: id });
     const s = (await t.web.get('/api/v3/data/summary')).body;
-    assert.equal(s.kinds.prices.imported, 5);
+    assert.equal(s.kinds.prices.imported, 7);
     const stats = (await t.web.get('/api/v3/data/stats?period=all')).body;
-    assert.equal(stats.prices.imported, 5);
+    assert.equal(stats.prices.imported, 7);
     const series = (await t.web.get('/api/v3/data/series?item=i-milk&period=all')).body;
     assert.ok(series.weeks.some((w) => w.imported === true));
     assert.ok(series.weeks.some((w) => !w.imported));

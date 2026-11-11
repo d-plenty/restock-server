@@ -2,7 +2,7 @@
 
 Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock, shows your spending and price history in its **Data** tab, and gives you Restock in a web browser on any computer and [on iPhone](#restock-on-iphone).
 
-**Works with Restock 0.9.4, 0.9.5 and 0.9.6** on your phones. Use 0.9.6 on every phone to get everything in step (0.9.5 phones keep syncing as before). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
+**Works with Restock 0.9.4, 0.9.5, 0.9.6 and 0.9.7** on your phones. Use 0.9.7 on every phone to get everything in step (older phones keep syncing as before). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
 
 > **Local first, always.** Every phone keeps its own full copy of what it shares. Your list, pantry and receipts work with no signal and with the server off; changes go up at the next sync. Only searching the shops needs the internet. **The server is optional:** a phone never needs it to work.
 
@@ -198,7 +198,7 @@ The **Data** tab (between Server and phones and Settings) shows what's on the se
 - Ranges: **1 month · 2 months · 3 months · 6 months · 1 year**.
 - **What's on this server, by kind:** prices, receipts, statistics, logs and deleted files kept for 30 days, with how much room each takes and the disk space left.
 - **Download your data:** a **spreadsheet (.xlsx)**, **CSV files (.zip)**, or a **full export file (.json)** to move your data to another machine. The full export file is an open, documented format (`restock-export`, see [For developers](#for-developers)). None of them has loyalty or gift card numbers or PINs, receipt text or photos, keys, passwords or the Home Assistant token. They do have your list, pantry, prices and spending, so keep them private.
-- **Import data:** add products and prices from a file (the full export file, or the CSV files from the zip) on top of what's here. It never replaces or deletes anything and never touches your list or pantry. A preview shows what it will add and skip, then you confirm with your passphrase. Imported prices are marked **imported**. Up to 100 MB, 25,000 products and 500,000 prices a file. Files with card numbers, PINs, passwords, keys or receipts are refused, and Costco prices are never imported or exported. Only import prices you're allowed to use: shops' websites have terms of use. The format is in [docs/restock-import.md](docs/restock-import.md).
+- **Import data:** add products and prices from a file (the full export file, or the CSV files from the zip) on top of what's here. It never replaces or deletes anything and never touches your list or pantry. A preview shows what it will add and skip, then you confirm with your passphrase. Imported prices are marked **imported**. Up to 100 MB, 25,000 products and 500,000 prices a file. Files with card numbers, PINs, passwords, keys or receipts are refused. Only import prices you're allowed to use: shops' websites have terms of use. The format is in [docs/restock-import.md](docs/restock-import.md).
 - **Refresh:** **Recount now** works out the spending again from what the server knows. **Ask phones to resend** asks each Restock 0.9.5 phone to send everything it has again at its next sync (once a day at most). Nothing doubles.
 
 <p align="center"><img src="docs/screenshots/web-data-light.png" alt="The Data tab: spending each month from what you ticked off, where you shop, and price over time" width="720"></p>
@@ -367,12 +367,12 @@ Then run the same `docker run` command as before. Your data stays in the volume.
 - **TrueNAS:** *Apps*, select it, then *Update* (or *Edit → Save* to pull again).
 - **Home Assistant app:** *Settings → Apps*, open **Restock server**, then *Update*.
 
-Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.9.6`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
+Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.9.7`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
 
 ### Updating from 0.9.4
 
 1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.9.6.** Phones still on 0.9.5 or 0.9.4 keep syncing as before.
+2. **Update your phones to Restock 0.9.7.** Phones still on 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
 3. **Check Auto delete** in **Data → Manage data**. Your 0.9.4 **Keep data for** setting carries on as Auto delete (12 months unless you changed it).
 4. **Want to search the shops from the web page?** Run the [try-search script](#let-the-web-page-search-the-shops) to see which shops answer, then turn it on in Settings.
 
