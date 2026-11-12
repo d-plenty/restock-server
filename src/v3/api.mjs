@@ -88,7 +88,26 @@ export async function makeV3(R) {
   const iso = (t) => (t ? new Date(t).toISOString() : null);
   const sealedAnswer = (actor, status, obj, req, res) => {
     if (actor?.type === 'web3') return R.send(req, res, status, web.seal(actor.session.key, obj), SEALED);
+    // 0.10.1: a phone that asks (X-Restock-Seal: rsf1) gets its answer sealed with the household's
+    // server key, with its request's nonce inside, so nobody else on the network can read (or swap)
+    // its Your data figures. 0.9.14 and 0.10.0 phones don't ask, and get them as before.
+    if (actor?.type === 'phone' && /\brsf1\b/.test(String(req.headers['x-restock-seal'] ?? '')) && K.serverKeys?.[String(K.keyv)]) {
+      const n = core?.parseAuthorization(req.headers.authorization)?.fields?.n ?? null;
+      const msg = obj && typeof obj === 'object' && !Array.isArray(obj) ? { ...obj, reqN: n } : { value: obj, reqN: n };
+      return R.send(req, res, status, Buffer.from(core.sealRsf1(Buffer.from(K.serverKeys[String(K.keyv)], 'base64url'), msg)), SEALED);
+    }
     return R.send(req, res, status, obj);
+  };
+  /** 0.10.1: a phone's body sealed with the household's server key (any version it knows). */
+  const phoneSealed = (body) => {
+    let m;
+    try {
+      m = core.openWithAny(K.serverKeys ?? {}, body).msg;
+    } catch {
+      throw new HttpError(400, 'sealed', "That isn't sealed for this household.");
+    }
+    if (!m || typeof m !== 'object' || Array.isArray(m)) throw new HttpError(400, 'sealed', "That isn't sealed for this household.");
+    return m;
   };
   function needMode(...modes) {
     if (!modes.includes(S.mode)) {
@@ -219,8 +238,8 @@ export async function makeV3(R) {
     const body = withBody ? await R.readBody(req, isFilePut ? R.maxFile : R.LIMITS.maxJson) : Buffer.alloc(0);
     const actor = ph ? checkPhone(req, ph, body) : wh ? web.check(req, wh, body) : null;
     if (actor?.type === 'web3') actor.sid = wh.f.s;
-    const input = (opts) => web.body(actor, req, body, opts);
     const sealedIn = () => String(req.headers['content-type'] || '').startsWith(SEALED);
+    const input = (opts) => (actor?.type === 'phone' && sealedIn() ? phoneSealed(body) : web.body(actor, req, body, opts));
     let m;
 
     // ---------- browsers: sign-in ----------

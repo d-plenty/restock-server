@@ -558,3 +558,42 @@ describe('0.10.0: a phone sends its earlier spending', () => {
     assert.equal((await t.web.req('POST', '/api/v3/data/spend', { json: { rows: [] } })).status, 403);
   });
 });
+
+describe('0.10.1: a phone can have its Your data figures and its spending sealed', () => {
+  test('sealed answers with its nonce inside, sealed spending in, plain for older phones', async () => {
+    const { t, a } = await withPhone();
+    const key = Buffer.from(a.serverKeys[String(a.keyv)], 'base64url');
+    // Asked for sealed: the answer is a sealed file only the household's keys open, with this request's nonce.
+    let auth;
+    const r = await fetch(t.base + '/api/v3/data/stats?period=3', {
+      headers: { 'X-Restock-Seal': 'rsf1', Authorization: (auth = a.authHeader('GET', '/api/v3/data/stats?period=3', undefined)) },
+    });
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type'), /x-restock-sealed/);
+    const raw = Buffer.from(await r.arrayBuffer());
+    assert.throws(() => JSON.parse(raw.toString('utf8')));
+    const opened = core.openRsf1(key, raw);
+    assert.equal(opened.reqN, /n=([^,]+)/.exec(auth)[1]);
+    assert.ok(opened.spending);
+    // Not asked (a 0.9.14 or 0.10.0 phone): plain, as before.
+    const plain = await a.req('GET', '/api/v3/data/stats?period=3');
+    assert.ok(plain.body.spending);
+    // Spending sealed with the household's server key goes in; something else sealed doesn't.
+    const rows = { rows: [{ entry_id: 's1', checked_at: Date.now() - 3600_000, text: 'Bread', chain: 'aldi', qty: 1, price: 2.5 }] };
+    const body = Buffer.from(core.sealRsf1(key, rows));
+    const sealedPost = await fetch(t.base + '/api/v3/data/spend', {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'application/x-restock-sealed', 'X-Restock-Seal': 'rsf1', Authorization: a.authHeader('POST', '/api/v3/data/spend', body) },
+    });
+    assert.equal(sealedPost.status, 200);
+    assert.deepEqual({ ...core.openRsf1(key, Buffer.from(await sealedPost.arrayBuffer())), reqN: undefined }, { added: 1, skipped: 0, reqN: undefined });
+    const wrong = Buffer.from(core.sealRsf1(Buffer.alloc(32, 7), rows));
+    const no = await fetch(t.base + '/api/v3/data/spend', {
+      method: 'POST',
+      body: wrong,
+      headers: { 'Content-Type': 'application/x-restock-sealed', Authorization: a.authHeader('POST', '/api/v3/data/spend', wrong) },
+    });
+    assert.equal(no.status, 400);
+  });
+});

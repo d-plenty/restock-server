@@ -835,7 +835,8 @@ export function makeData(R) {
   async function api(c) {
     const { path, method, url, actor } = c;
     // 0.9.14: a phone in the household may read the statistics too (Settings → Your data on the phone),
-    // never export, delete or change anything. Its answers aren't sealed (it signs every request).
+    // never export, delete or change anything. It signs every request; from 0.10.1 it asks for its
+    // answers sealed with the household's server key (api.mjs sealedAnswer), and seals what it sends.
     const canRead = () => {
       if (actor?.type === 'phone') return;
       c.needWeb(actor);
