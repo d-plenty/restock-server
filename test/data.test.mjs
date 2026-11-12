@@ -539,3 +539,22 @@ describe('Auto delete, Ask phones to resend, and who may call', () => {
     assert.equal(t.state.mode, 'v3');
   });
 });
+
+describe('0.10.0: a phone sends its earlier spending', () => {
+  test('added once, checked, and only from a phone', async () => {
+    const { t, a } = await withPhone();
+    const row = (id, at, extra = {}) => ({ entry_id: id, checked_at: at, text: 'Milk', chain: 'coles', section: 'pantry', qty: 2, price: 3.5, usual: 4.95, special: 1, ...extra });
+    const t3 = ago(3);
+    const r = await a.req('POST', '/api/v3/data/spend', { json: { rows: [row('l1', t3), row('l2', ago(4), { price: 'x' }), row('demo-1', ago(1)), row('l3', ago(-5))] } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body, { added: 2, skipped: 2 }); // demo and the future one skipped; a bad price is kept unpriced
+    assert.deepEqual(rows(t, "SELECT entry_id, total, src FROM srv_spend WHERE entry_id IN ('l1', 'l2') ORDER BY entry_id"), [
+      { entry_id: 'l1', total: 7, src: 'phone' },
+      { entry_id: 'l2', total: null, src: 'phone' },
+    ]);
+    const again = await a.req('POST', '/api/v3/data/spend', { json: { rows: [row('l1', t3, { price: 1 })] } });
+    assert.deepEqual(again.body, { added: 0, skipped: 0 }); // already there: left as it is
+    assert.equal(rows(t, "SELECT price FROM srv_spend WHERE entry_id = 'l1'")[0].price, 3.5);
+    assert.equal((await t.web.req('POST', '/api/v3/data/spend', { json: { rows: [] } })).status, 403);
+  });
+});

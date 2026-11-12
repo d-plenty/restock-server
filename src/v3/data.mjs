@@ -24,7 +24,7 @@ const HISTORY_DAYS = 183;
 export const KINDS = ['prices', 'receipts', 'stats', 'logs', 'backups'];
 export const WORD = 'DELETE';
 export const WORD_ALL = 'DELETE EVERYTHING';
-const LIMITS = { tableRows: 50000, pageRows: 10000, pageDefault: 5000, topMax: 50, topDefault: 10, recountRows: 100000, recountChunk: 500, recountGapS: 60, seriesWeeks: 530, paid: 200, removedKept: 1000 };
+const LIMITS = { spendRows: 5000, tableRows: 50000, pageRows: 10000, pageDefault: 5000, topMax: 50, topDefault: 10, recountRows: 100000, recountChunk: 500, recountGapS: 60, seriesWeeks: 530, paid: 200, removedKept: 1000 };
 const CHAIN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 /** The shopping lists' names (shops.ts LIST_NAMES): internal ids stay (pharmacy is Health). */
 const LIST_NAMES = { pantry: 'Groceries', keg: 'Keg', pharmacy: 'Health', general: 'General' };
@@ -265,6 +265,48 @@ export function makeData(R) {
       throw e;
     }
     return out;
+  }
+
+  /** 0.10.0: a phone's spending rows (POST /api/v3/data/spend), checked, added unless already here. */
+  function takeSpend(rows, by) {
+    const raw = db();
+    if (!raw) throw new HttpError(409, 'mode', 'Set up this server first.');
+    const cut = R.house.cutoff(now());
+    const cutMs = Math.max(cut ? Date.parse(cut) : -Infinity, Number(R.engine.meta('srv_spend_floor') ?? 0) || -Infinity);
+    const t = now();
+    const str = (v, max) => (typeof v === 'string' && v.length <= max ? v : null);
+    const money = (v) => (v === null || v === undefined ? null : Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) < 100000 ? round2(Number(v)) : null);
+    const ins = raw.prepare(
+      'INSERT OR IGNORE INTO srv_spend (entry_id, checked_at, at, chain, section, item_id, product_id, text, qty, price, total, usual, special, src) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    let added = 0;
+    let skipped = 0;
+    raw.exec('SAVEPOINT takespend');
+    try {
+      for (const r of rows) {
+        const id = str(r?.entry_id, 100);
+        const at = Number(r?.checked_at);
+        const text = str(r?.text, 200);
+        if (!id || id.startsWith('demo-') || !text || !Number.isFinite(at) || at <= 0 || at > t + DAY || at < cutMs) {
+          skipped++;
+          continue;
+        }
+        const chain = typeof r.chain === 'string' && CHAIN.test(r.chain) ? r.chain : null;
+        const section = typeof r.section === 'string' && LIST_NAMES[r.section] ? r.section : 'pantry';
+        const qty = Math.max(1, Math.min(10000, Math.trunc(Number(r.qty) || 1)));
+        const price = money(r.price);
+        const usual = money(r.usual);
+        const out = ins.run(id, at, iso(at), chain, section, str(r.item_id, 100), str(r.product_id, 200), text, qty, price, price === null ? null : round2(price * qty), usual, r.special ? 1 : 0, 'phone');
+        if (Number(out.changes)) added++;
+      }
+      raw.exec('RELEASE takespend');
+    } catch (e) {
+      raw.exec('ROLLBACK TO takespend');
+      raw.exec('RELEASE takespend');
+      throw e;
+    }
+    if (added) R.note('spending-added', { by, added });
+    return { added, skipped };
   }
 
   /**
@@ -819,6 +861,15 @@ export function makeData(R) {
       const item = String(q('item') ?? '');
       if (!item || item.length > 200) throw new HttpError(400, 'item', 'Which item?');
       return answer(series(item, q('period')));
+    }
+    // 0.10.0: "Share my spending with the server": a phone's own spending record from before (its
+    // spend_log, from ticks the server may never have seen), sent once. Keyed as the server keys its
+    // own (the line and its tick), so a purchase the server already has is left as it is.
+    if (path === '/api/v3/data/spend' && method === 'POST') {
+      if (actor?.type !== 'phone') throw new HttpError(403, 'forbidden', 'Phones send this.');
+      const b = c.input();
+      const rows = Array.isArray(b.rows) ? b.rows.slice(0, LIMITS.spendRows) : [];
+      return answer(takeSpend(rows, actor.by));
     }
     if (path === '/api/v3/data/export' && method === 'GET') {
       c.needWeb(actor);
