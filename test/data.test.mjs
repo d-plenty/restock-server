@@ -508,7 +508,7 @@ describe('Auto delete, Ask phones to resend, and who may call', () => {
     assert.deepEqual((await t.web.get('/api/v3/data/summary')).body.resend, later.body);
   });
 
-  test('every Data endpoint needs a browser session: none 401, a phone 403, a bad MAC 401', async () => {
+  test('every Data endpoint needs a browser session: none 401, a phone 403 (0.9.14: but it reads the statistics), a bad MAC 401', async () => {
     const { t, a } = await withPhone();
     const eps = [
       ['GET', '/api/v3/data/summary'],
@@ -530,7 +530,9 @@ describe('Auto delete, Ask phones to resend, and who may call', () => {
       const none = await fetch(t.base + path, { method, body, headers: { 'Content-Type': 'application/json' } });
       assert.equal(none.status, 401, path);
       const ph = await a.req(method, path, method === 'GET' ? {} : { json: {} });
-      assert.equal(ph.status, 403, path);
+      // 0.9.14: a phone may read the statistics (Your data), and nothing else here.
+      const phoneReads = /^\/api\/v3\/data\/(summary|stats|top|series)/.test(path);
+      assert.equal(ph.status, phoneReads ? (path.includes('series') ? 404 : 200) : 403, path);
       const bad = await t.web.req(method, path, { ...(method === 'GET' ? {} : { json: {} }), auth: `RestockWeb3 s=${t.web.session}, t=${Date.now()}, n=${'A'.repeat(22)}, m=${'0'.repeat(64)}` });
       assert.equal(bad.status, 401, path);
     }

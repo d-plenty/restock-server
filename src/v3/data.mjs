@@ -792,24 +792,30 @@ export function makeData(R) {
   /** c: { req, res, ip, url, path, method, actor, body, input, needWeb, needConfirm, sealedAnswer }. */
   async function api(c) {
     const { path, method, url, actor } = c;
+    // 0.9.14: a phone in the household may read the statistics too (Settings → Your data on the phone),
+    // never export, delete or change anything. Its answers aren't sealed (it signs every request).
+    const canRead = () => {
+      if (actor?.type === 'phone') return;
+      c.needWeb(actor);
+    };
     const q = (k) => url.searchParams.get(k);
     const answer = (obj) => c.sealedAnswer(actor, 200, obj, c.req, c.res);
     let m;
     if (path.startsWith('/api/v3/data/import/')) return importer.api(c);
     if (path === '/api/v3/data/summary' && method === 'GET') {
-      c.needWeb(actor);
+      canRead();
       return answer(await summary());
     }
     if (path === '/api/v3/data/stats' && method === 'GET') {
-      c.needWeb(actor);
+      canRead();
       return answer(stats(q('period')));
     }
     if (path === '/api/v3/data/top' && method === 'GET') {
-      c.needWeb(actor);
+      canRead();
       return answer(top(q('period'), q('offset'), q('limit')));
     }
     if (path === '/api/v3/data/series' && method === 'GET') {
-      c.needWeb(actor);
+      canRead();
       const item = String(q('item') ?? '');
       if (!item || item.length > 200) throw new HttpError(400, 'item', 'Which item?');
       return answer(series(item, q('period')));
