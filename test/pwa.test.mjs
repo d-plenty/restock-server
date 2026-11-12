@@ -77,7 +77,8 @@ describe('the home screen web app', () => {
       // blob: is for the receipt reader's own worker (tesseract.js), as in 0.9.4; no other place.
       assert.deepEqual(d.get('worker-src'), ["'self'", 'blob:']);
       assert.deepEqual(d.get('default-src'), ["'self'"]);
-      assert.deepEqual(d.get('connect-src'), ["'self'"]);
+      // 0.9.13: the web app may also send feedback to Restock's own inbox (one fixed address); the setup page may not.
+      assert.deepEqual(d.get('connect-src'), csp === APP_CSP ? ["'self'", 'https://restock-prices.plenty.family'] : ["'self'"]);
       assert.deepEqual(d.get('script-src'), ["'self'", "'wasm-unsafe-eval'"]);
       assert.deepEqual(d.get('frame-ancestors'), ["'none'"]);
       assert.deepEqual(d.get('object-src'), ["'none'"]);

@@ -281,7 +281,12 @@ export const IMAGE_HOSTS = [
   'https://cdn.shopify.com', // shops on Shopify (smaller pharmacies and bottle shops)
   'https://images.openfoodfacts.org', // barcode look-ups (Open Food Facts' image_small_url)
 ];
-export const APP_CSP = PAGE_CSP.replace("img-src 'self' data: blob:", `img-src 'self' data: blob: ${IMAGE_HOSTS.join(' ')}`);
+/** 0.9.13: Settings → Feedback sends to Restock's own feedback inbox, only when Send is pressed (never this household's data). */
+export const FEEDBACK_HOST = 'https://restock-prices.plenty.family';
+export const APP_CSP = PAGE_CSP.replace("img-src 'self' data: blob:", `img-src 'self' data: blob: ${IMAGE_HOSTS.join(' ')}`).replace(
+  "connect-src 'self'",
+  `connect-src 'self' ${FEEDBACK_HOST}`,
+);
 /** For the API: nothing it returns is ever a page. */
 const API_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox";
 
