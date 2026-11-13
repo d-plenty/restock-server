@@ -27,7 +27,8 @@ export const SEARCH_LIMITS = {
   maxPicks: 6,
 };
 export const OFF_MESSAGE = 'Turn on Let the web page search the shops in Settings.';
-const SECTIONS = ['pantry', 'keg', 'pharmacy'];
+// 0.10.3: and Baby and Pets (beta).
+const SECTIONS = ['pantry', 'keg', 'pharmacy', 'baby', 'pets'];
 const TARGETS = ['pantry', 'list', 'both'];
 const CHAIN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -118,7 +119,7 @@ export function makeSearch(R) {
     const barcode = b.barcode === undefined || b.barcode === null || b.barcode === '' ? undefined : String(b.barcode);
     if (barcode !== undefined && !/^\d{8,14}$/.test(barcode)) throw new HttpError(400, 'barcode', 'A barcode is 8 to 14 numbers.');
     const section = b.section === undefined ? 'pantry' : b.section;
-    if (!SECTIONS.includes(section)) throw new HttpError(400, 'section', 'Search the Pantry, Keg or Health shops.');
+    if (!SECTIONS.includes(section)) throw new HttpError(400, 'section', 'Search the Pantry, Keg, Health, Baby or Pets shops.');
     const only = b.chain === undefined || b.chain === null ? undefined : String(b.chain);
     if (only !== undefined && !CHAIN.test(only)) throw new HttpError(400, 'chain', "That isn't one of your shops.");
     const rows = db().prepare("SELECT k, v FROM household_settings WHERE k LIKE 'branch:%'").all();
