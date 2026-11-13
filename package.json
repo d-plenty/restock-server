@@ -1,6 +1,6 @@
 {
   "name": "restock-server",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "private": true,
   "description": "Restock server: an optional, self-hosted server for a Restock household. It keeps the household, merges what phones share, runs Home Assistant, shows your data and serves the web app (on iPhone too).",
   "license": "GPL-3.0-only",
