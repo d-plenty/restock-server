@@ -120,7 +120,7 @@ export function makeSearch(R) {
     const barcode = b.barcode === undefined || b.barcode === null || b.barcode === '' ? undefined : String(b.barcode);
     if (barcode !== undefined && !/^\d{8,14}$/.test(barcode)) throw new HttpError(400, 'barcode', 'A barcode is 8 to 14 numbers.');
     const section = b.section === undefined ? 'pantry' : b.section;
-    if (!SECTIONS.includes(section)) throw new HttpError(400, 'section', 'Search the Pantry, Keg, Health, Baby or Pets shops.');
+    if (!SECTIONS.includes(section)) throw new HttpError(400, 'section', "That section isn't one Restock knows.");
     const only = b.chain === undefined || b.chain === null ? undefined : String(b.chain);
     if (only !== undefined && !CHAIN.test(only)) throw new HttpError(400, 'chain', "That isn't one of your shops.");
     const rows = db().prepare("SELECT k, v FROM household_settings WHERE k LIKE 'branch:%'").all();
