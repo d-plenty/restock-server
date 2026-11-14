@@ -28,7 +28,8 @@ export const SEARCH_LIMITS = {
 };
 export const OFF_MESSAGE = 'Turn on Let the web page search the shops in Settings.';
 // 0.10.3: and Baby and Pets (beta).
-const SECTIONS = ['pantry', 'keg', 'pharmacy', 'baby', 'pets'];
+// 0.10.7: and the custom sections c1–c6 (the app's shops.ts SECTIONS)
+const SECTIONS = ['pantry', 'keg', 'pharmacy', 'baby', 'pets', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
 const TARGETS = ['pantry', 'list', 'both'];
 const CHAIN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 

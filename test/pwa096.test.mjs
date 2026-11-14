@@ -24,10 +24,10 @@ describe('0.9.6: the iPhone web app offline and its phone layout', () => {
     if (existsSync(pkg)) assert.equal(shell.version, JSON.parse(readFileSync(pkg, 'utf8')).version, 'the shell names the release');
     assert.match(shell.build, /^[0-9a-z]{7,}$/);
     const files = new Set(shell.files);
-    // Every script, style sheet and wasm of the build (but the receipt reader and the QR maker).
+    // Every script, style sheet and wasm of the build (but the text reader, the QR maker and, 0.10.7, the shop map).
     const assets = readdirSync(join(built, 'assets'));
     for (const f of assets) {
-      if (!/\.(js|css|wasm)$/.test(f) || /tesseract|traineddata|worker\.min|zxing_writer/i.test(f)) continue;
+      if (!/\.(js|css|wasm)$/.test(f) || /tesseract|traineddata|worker\.min|zxing_writer|ppocrv5|ort-wasm|ocrWorker|maplibre-gl/i.test(f)) continue;
       assert.ok(files.has(`assets/${f}`), `assets/${f} is kept for offline`);
     }
     // The database engine (the household's copy) is among them.
