@@ -27,7 +27,7 @@ export const WORD_ALL = 'DELETE EVERYTHING';
 const LIMITS = { spendRows: 5000, tableRows: 50000, pageRows: 10000, pageDefault: 5000, topMax: 50, topDefault: 10, recountRows: 100000, recountChunk: 500, recountGapS: 60, seriesWeeks: 530, paid: 200, removedKept: 1000 };
 const CHAIN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 /** The shopping lists' names (shops.ts LIST_NAMES): internal ids stay (pharmacy is Health). */
-const LIST_NAMES = { pantry: 'Groceries', keg: 'Keg', pharmacy: 'Health', general: 'General' };
+const LIST_NAMES = { pantry: 'Groceries', keg: 'Bottle shop', pharmacy: 'Chemist', general: 'General' };
 
 const round2 = (n) => Math.round(n * 100) / 100;
 const pad = (n) => String(n).padStart(2, '0');

@@ -2,7 +2,7 @@
 
 Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock, shows your spending and price history in its **Data** tab, and gives you Restock in a web browser on any computer and [on iPhone](#restock-on-iphone).
 
-**Works with Restock 0.9.4 to 0.10.9** on your phones. Use 0.10.9 on every phone to get everything in step (older phones keep syncing as before, but phones before 0.10.3 show Baby and Pets things in their Pantry until they're updated). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
+**Works with Restock 0.9.4 to 0.10.10** on your phones. Use 0.10.10 on every phone to get everything in step (older phones keep syncing as before, but phones before 0.10.3 show Baby and Pets things in their Pantry until they're updated). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
 
 > **Local first, always.** Every phone keeps its own full copy of what it shares. Your list, pantry and receipts work with no signal and with the server off; changes go up at the next sync. Only searching the shops needs the internet. **The server is optional:** a phone never needs it to work.
 
@@ -141,8 +141,8 @@ The code has the server's own key in it, so the phone knows it's talking to your
 Sign in on any computer and you have Restock laid out for a big screen, from what your phones share:
 
 - **Home:** a greeting and the date, your Shopping list, and this week's specials on the things you buy.
-- **Shopping list:** Groceries, Keg, Health and **General**, with the views **By shop · Aisle group · One list**. Click a line to open the item, with a big photo at the top; only the tick box ticks it off. Type in the add box to add from your pantry, or the words as they are.
-- **Pantry, Keg and Health:** your items, their prices at each shop, and the history the server keeps.
+- **Shopping list:** Groceries, Bottle shop, Chemist and **General**, with the views **By shop · Aisle group · One list**. Click a line to open the item, with a big photo at the top; only the tick box ticks it off. Type in the add box to add from your pantry, or the words as they are.
+- **Pantry, Bottle shop and Chemist:** your items, their prices at each shop, and the history the server keeps.
 - **Specials and catalogues:** every shop you follow, with its website, specials and catalogue links, plus This week's specials and My catalogue from what your phones found. **Previous** and **Next** sit above and below a catalogue's pages (the arrow keys work too), and clicking a product opens it.
 - **Pick my milk:** a line added as words (by Home Assistant, say) has a Pick button. If nothing in your pantry matches, it can [search the shops](#let-the-web-page-search-the-shops) for it, when that's turned on.
 - **Undo:** after a change, a big white **Undo** shows at the bottom of the sidebar (with Sync now and Sign out) for a few seconds. One click (or Ctrl+Z, Cmd+Z on a Mac) puts it all back, even after "Add all to my list".
@@ -253,7 +253,7 @@ With `docker run`, use `docker exec restock-server node scripts/try-search.mjs`.
 
 ## What each phone shares
 
-Each phone chooses, in **Your server → What this phone shares**: **Groceries** (pantry, Shopping list and General list, on by default), **Keg** and **Health** (off: everyone on the server would see what you buy there), **Receipts** (off) and **Loyalty cards** (off; best kept on your phone). What a phone doesn't share never leaves it. The server also checks: it takes from each phone only what that phone says it shares.
+Each phone chooses, in **Your server → What this phone shares**: **Groceries** (pantry, Shopping list and General list, on by default), **Bottle shop** and **Chemist** (off: everyone on the server would see what you buy there), **Receipts** (off) and **Loyalty cards** (off; best kept on your phone). What a phone doesn't share never leaves it. The server also checks: it takes from each phone only what that phone says it shares.
 
 Turning something off stops sending it; what it already shared stays on the server, unless you tick **Also take what this phone shared off the server**, which deletes that phone's own shared things for that tab (other people's stay). Prices and product details found at the shops stay for the household: they're about the shops, not about you.
 
@@ -261,7 +261,7 @@ Turning something off stops sending it; what it already shared stays on the serv
 
 In a household on the server, the shopping list syncs with Home Assistant **from the server**, all the time, for every phone and browser: one list, one token. On the web page, open **Home Assistant**, enter the address you open Home Assistant with (for example `http://homeassistant.local:8123`, or `http://homeassistant:8123` for the Home Assistant app), paste a **long-lived access token** (your Home Assistant profile → Security), **Test connection**, pick the to-do list and turn it on. It syncs every minute and a few seconds after a phone changes the list.
 
-A voice add that matches one of your items goes on that item's list (Pantry first, then Keg, then Health). One that matches nothing goes on the **General** list.
+A voice add that matches one of your items goes on that item's list (Pantry first, then Bottle shop, then Chemist). One that matches nothing goes on the **General** list.
 
 The token is kept on the server only (in `keys.json`); it's never shown again, never sent to phones or browsers, and never written in the logs. Plain `http://` only goes to an address at home or on Tailscale; anything else needs `https://`. If a phone ran Home Assistant before (Restock 0.9.3), it moves here when you hand the household over or when that phone updates; until then the server won't run it twice, and the page says where it's still running.
 
@@ -368,12 +368,12 @@ Then run the same `docker run` command as before. Your data stays in the volume.
 - **TrueNAS:** *Apps*, select it, then *Update* (or *Edit → Save* to pull again).
 - **Home Assistant app:** *Settings → Apps*, open **Restock server**, then *Update*.
 
-Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.10.9`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
+Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.10.10`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
 
 ### Updating from 0.9.4
 
 1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.10.9.** Phones still on 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
+2. **Update your phones to Restock 0.10.10.** Phones still on 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
 3. **Check Auto delete** in **Data → Manage data**. Your 0.9.4 **Keep data for** setting carries on as Auto delete (12 months unless you changed it).
 4. **Want to search the shops from the web page?** Run the [try-search script](#let-the-web-page-search-the-shops) to see which shops answer, then turn it on in Settings.
 
@@ -382,7 +382,7 @@ Good to know:
 - **Phones still on 0.9.4 don't show the General list.** Its lines stay on the server and the 0.9.5 phones, and reach that phone when it updates.
 - **Ask phones to resend** only works with Restock 0.9.5 phones.
 - **Auto delete can now be any number of months from 1 to 120.** Phones still on 0.9.4 only understand 3, 6, 9 or 12: for any other number they show it as off, but the server still deletes older data every night.
-- **Pharmacy is now called Health**, on the web page and the phones. Nothing else about it changed.
+- **Pharmacy was renamed Health in 0.9.x, and from 0.10.10 it is Chemist** (and Keg is Bottle shop), on the web page and the phones. Nothing else about them changed.
 - **Spending in the Data tab** starts from what's ticked off on your list now and from here on. What was ticked off and cleared before the update isn't counted.
 
 ## Already using the server with Restock 0.9.3?
@@ -402,7 +402,7 @@ If your phones already share a household over Wi-Fi or a cloud drive folder: on 
 
 ## What the server can read
 
-**In a household on the server (0.9.4 and newer),** the server can read what phones share with it: the shopping lists and pantry, Keg and Health if shared, receipts and their photos if shared, prices including years of history, what's been ticked off (for spending), the household record, each phone's settings summary, the Home Assistant token, and the activity log and logs. It needs to, to merge, keep history and statistics, run Home Assistant and show the web app. Loyalty card numbers are blanked before they reach its database (a phone that shares cards still puts them in its sealed file, which the server can open).
+**In a household on the server (0.9.4 and newer),** the server can read what phones share with it: the shopping lists and pantry, Bottle shop and Chemist if shared, receipts and their photos if shared, prices including years of history, what's been ticked off (for spending), the household record, each phone's settings summary, the Home Assistant token, and the activity log and logs. It needs to, to merge, keep history and statistics, run Home Assistant and show the web app. Loyalty card numbers are blanked before they reach its database (a phone that shares cards still puts them in its sealed file, which the server can open).
 
 **It never has:** anything a phone doesn't share, your passphrase, or the phones' private keys.
 
