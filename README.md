@@ -13,6 +13,8 @@ Your household's own server for [Restock](https://github.com/d-plenty/Restock), 
 
 <p align="center"><img src="docs/screenshots/web-home-light.png" alt="The Restock server's web page on a computer: Home, with a greeting and the date, the Shopping list and this week's specials"></p>
 
+The pictures on this page use sample data: real products and prices, with a made-up year of price history and spending.
+
 ## Contents
 
 - [Which machine?](#which-machine): Home Assistant, a Raspberry Pi or mini PC, or a NAS
@@ -151,7 +153,7 @@ Sign in on any computer and you have Restock laid out for a big screen, from wha
 
 <p align="center"><img src="docs/screenshots/web-list-light.png" alt="The Shopping list on the web, by shop, with the item panel open and its photo at the top" width="720"></p>
 
-<p align="center"><img src="docs/screenshots/web-specials-light.png" alt="Specials and catalogues: My catalogue, with Previous and Next above the page" width="720"></p>
+<p align="center"><img src="docs/screenshots/web-specials-light.png" alt="Catalogues and specials: My catalogue, with Previous and Next above the page" width="720"></p>
 
 <p align="center"><img src="docs/screenshots/web-settings-light.png" alt="Settings on the web, with Save settings at the top right and Let the web page search the shops" width="720"></p>
 
