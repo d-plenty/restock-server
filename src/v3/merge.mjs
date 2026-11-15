@@ -38,6 +38,16 @@ const SERVER_TABLES = [
     qty INTEGER NOT NULL DEFAULT 1, price REAL, total REAL, usual REAL, special INTEGER NOT NULL DEFAULT 0, src TEXT NOT NULL,
     PRIMARY KEY (entry_id, checked_at))`,
   'CREATE INDEX IF NOT EXISTS srv_spend_at ON srv_spend(checked_at)',
+  // 0.11.0: what the phones' searches found (data.mjs takeSeen): one row for each product and day,
+  // whichever phone saw it last that day. Only what a shop's website showed; history, never used
+  // as a current price. Deleted with the prices (Delete data, Auto delete).
+  `CREATE TABLE IF NOT EXISTS srv_seen (
+    chain TEXT NOT NULL, store_product_id TEXT NOT NULL, day TEXT NOT NULL,
+    name TEXT NOT NULL, brand TEXT, size TEXT, barcode TEXT, image_url TEXT,
+    price REAL NOT NULL, was_price REAL, is_special INTEGER NOT NULL DEFAULT 0, member_only INTEGER NOT NULL DEFAULT 0,
+    promo TEXT, in_stock INTEGER, device TEXT, at TEXT NOT NULL,
+    PRIMARY KEY (chain, store_product_id, day))`,
+  'CREATE INDEX IF NOT EXISTS srv_seen_day ON srv_seen(day)',
 ];
 /** What Auto delete (0.9.4's Keep data for) covers: data.mjs kinds. */
 export const AUTO_KINDS = ['prices', 'receipts', 'stats', 'logs'];
@@ -609,6 +619,8 @@ export function makeMerger(R) {
       why === 'keep-data-for' && k.has('prices') && k.has('receipts') ? e.prune(cutoff) : dropRows(cutoff, { prices: k.has('prices'), receipts: k.has('receipts') });
     const photos = await dropPhotos(gone.receipts, why);
     if (k.has('prices')) raiseFloor('prices_floor', cutoff);
+    // 0.11.0: what searches found goes with the prices (its day is a calendar day, YYYY-MM-DD)
+    const seen = k.has('prices') ? Number(raw.prepare('DELETE FROM srv_seen WHERE day < ?').run(String(cutoff).slice(0, 10)).changes) : 0;
     if (k.has('receipts')) raiseFloor('receipts_floor', cutoff);
     let archives = 0;
     for (const n of archivesFor(cutoff, k)) if (await R.trashFile(n, 'srv-' + S.sid, why)) archives++;
@@ -627,7 +639,7 @@ export function makeMerger(R) {
     }
     const backups = k.has('backups') ? await R.emptyTrash(cutoff) : 0;
     raw.prepare('DELETE FROM srv_specials WHERE at < ?').run(iso(now() - 60 * DAY));
-    const out = { cutoff, prices: gone.prices, receipts: gone.receipts.length, photos, archives, logs, stats, backups };
+    const out = { cutoff, prices: gone.prices + seen, receipts: gone.receipts.length, photos, archives, logs, stats, backups };
     logLine('log', 'pruned', null, { ...out, kinds: [...k], why });
     writeOwn();
     return out;
@@ -638,6 +650,7 @@ export function makeMerger(R) {
     const out = { cutoff, prices: 0, receipts: 0, photos: 0, archives: 0, logs: 0, stats: 0, backups: 0, dryRun: true };
     if (k.has('prices')) {
       out.prices = Number(raw.prepare(`SELECT COUNT(*) AS n FROM prices WHERE date < ? AND source <> 'demo' AND date < (SELECT MAX(q.date) FROM prices q WHERE q.product_id = prices.product_id)`).get(cutoff).n);
+      out.prices += Number(raw.prepare('SELECT COUNT(*) AS n FROM srv_seen WHERE day < ?').get(String(cutoff).slice(0, 10)).n);
     }
     if (k.has('receipts')) {
       const going = raw.prepare("SELECT id, photo, pages FROM receipts WHERE scanned_at < ? AND pinned = 0 AND id NOT LIKE 'demo-%'").all(cutoff).map((r) => ({ ...r }));

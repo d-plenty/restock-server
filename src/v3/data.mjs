@@ -24,7 +24,7 @@ const HISTORY_DAYS = 183;
 export const KINDS = ['prices', 'receipts', 'stats', 'logs', 'backups'];
 export const WORD = 'DELETE';
 export const WORD_ALL = 'DELETE EVERYTHING';
-const LIMITS = { spendRows: 5000, tableRows: 50000, pageRows: 10000, pageDefault: 5000, topMax: 50, topDefault: 10, recountRows: 100000, recountChunk: 500, recountGapS: 60, seriesWeeks: 530, paid: 200, removedKept: 1000 };
+const LIMITS = { seenRows: 500, spendRows: 5000, tableRows: 50000, pageRows: 10000, pageDefault: 5000, topMax: 50, topDefault: 10, recountRows: 100000, recountChunk: 500, recountGapS: 60, seriesWeeks: 530, paid: 200, removedKept: 1000 };
 const CHAIN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 /** The shopping lists' names (shops.ts LIST_NAMES): internal ids stay (pharmacy is Health). */
 const LIST_NAMES = { pantry: 'Groceries', keg: 'Bottle shop', pharmacy: 'Chemist', general: 'General' };
@@ -310,6 +310,57 @@ export function makeData(R) {
   }
 
   /**
+   * 0.11.0: what a phone's searches found (POST /api/v3/data/seen), checked row by row and kept in
+   * srv_seen: one row for each product and day (a later reading of the same day replaces it). Only
+   * what a shop's website showed. Nothing here is a current price, and it's never sent on anywhere.
+   */
+  function takeSeen(rows, by) {
+    const raw = db();
+    if (!raw) throw new HttpError(409, 'mode', 'Set up this server first.');
+    const cut = R.house.cutoff(now());
+    const cutDay = cut ? String(cut).slice(0, 10) : '';
+    const maxDay = iso(now() + 2 * DAY).slice(0, 10);
+    const str = (v, max) => (typeof v === 'string' && v.length && v.length <= max ? v : null);
+    const money = (v) => (v === null || v === undefined ? null : Number.isFinite(Number(v)) && Number(v) > 0 && Number(v) < 100000 ? round2(Number(v)) : null);
+    const flag = (v) => (v === true || v === 1 ? 1 : 0);
+    const ins = raw.prepare(
+      'INSERT OR REPLACE INTO srv_seen (chain, store_product_id, day, name, brand, size, barcode, image_url, price, was_price, is_special, member_only, promo, in_stock, device, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    const at = iso(now());
+    let added = 0;
+    let skipped = 0;
+    raw.exec('SAVEPOINT takeseen');
+    try {
+      for (const r of rows) {
+        const chain = typeof r?.chain === 'string' && CHAIN.test(r.chain) ? r.chain : null;
+        const id = str(r?.store_product_id, 80);
+        const day = typeof r?.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.day) && !Number.isNaN(Date.parse(r.day)) ? r.day : null;
+        const name = str(r?.name, 200);
+        const price = money(r?.price);
+        if (!chain || !id || id.startsWith('demo-') || !day || day > maxDay || day < cutDay || !name || price === null) {
+          skipped++;
+          continue;
+        }
+        const was = money(r.was_price);
+        ins.run(
+          chain, id, day, name, str(r.brand, 80), str(r.size, 60),
+          typeof r.barcode === 'string' && /^\d{8,14}$/.test(r.barcode) ? r.barcode : null,
+          typeof r.image_url === 'string' && r.image_url.length <= 300 && /^https:\/\//.test(r.image_url) ? r.image_url : null,
+          price, was !== null && was > price ? was : null, flag(r.is_special), flag(r.member_only), str(r.promo, 120),
+          r.in_stock === null || r.in_stock === undefined ? null : flag(r.in_stock), typeof by === 'string' ? by.slice(0, 100) : null, at,
+        );
+        added++;
+      }
+      raw.exec('RELEASE takeseen');
+    } catch (e) {
+      raw.exec('ROLLBACK TO takeseen');
+      raw.exec('RELEASE takeseen');
+      throw e;
+    }
+    return { added, skipped };
+  }
+
+  /**
    * Recount: the ticks noted again (sweep), then each purchase priced again from what the server knows
    * now: the line's own price if the line is still there with that tick, else the price it had from
    * its line, else the newest known price then; and its usual price. The statistics are computed from
@@ -508,7 +559,8 @@ export function makeData(R) {
       saved: { total: round2(Number(saved.s)), count: Number(saved.n) },
       itemsTracked: Number(raw.prepare("SELECT COUNT(*) AS n FROM items WHERE id NOT LIKE 'demo-%'").get().n),
       productsTracked: Number(inPeriod.products),
-      prices: { count: Number(prices.n), first: prices.first ?? null, inPeriod: Number(inPeriod.n), imported: Number(prices.imported ?? 0) },
+      // 0.11.0: `searched`: what the phones' searches found (srv_seen), kept beside the prices
+      prices: { count: Number(prices.n), first: prices.first ?? null, inPeriod: Number(inPeriod.n), imported: Number(prices.imported ?? 0), searched: Number(raw.prepare('SELECT COUNT(*) AS n FROM srv_seen').get().n) },
       top: top(periodV, 0, LIMITS.topDefault),
     };
   }
@@ -571,6 +623,8 @@ export function makeData(R) {
     const pr = raw.prepare("SELECT COUNT(*) AS n, MIN(date) AS oldest, COUNT(DISTINCT product_id) AS products, SUM(CASE WHEN source = 'imported' THEN 1 ELSE 0 END) AS imported FROM prices WHERE source <> 'demo'").get();
     const rc = raw.prepare("SELECT COUNT(*) AS n, MIN(scanned_at) AS oldest, SUM(pinned) AS pinned FROM receipts WHERE id NOT LIKE 'demo-%'").get();
     const sp = raw.prepare('SELECT COUNT(*) AS n, MIN(checked_at) AS oldest FROM srv_spend').get();
+    // 0.11.0: what searches found, counted with the prices
+    const sn = raw.prepare('SELECT COUNT(*) AS n, MIN(day) AS oldest FROM srv_seen').get();
     const lg = raw.prepare("SELECT COUNT(*) AS n, MIN(at) AS oldest, SUM(CASE WHEN kind = 'activity' THEN 1 ELSE 0 END) AS activity FROM srv_log").get();
     const trash = await R.trashInfo();
     const kinds = {
@@ -578,9 +632,13 @@ export function makeData(R) {
         count: Number(pr.n),
         products: Number(pr.products),
         imported: Number(pr.imported ?? 0),
+        searched: Number(sn.n),
         archives: archives.length,
         oldest: pr.oldest ?? null,
-        bytes: bytesOf(['prices', 'prices_product_date'], "SELECT SUM(60 + length(product_id) + length(date) + COALESCE(length(promo), 0)) AS b FROM prices") + sumOf(archives),
+        bytes:
+          bytesOf(['prices', 'prices_product_date'], "SELECT SUM(60 + length(product_id) + length(date) + COALESCE(length(promo), 0)) AS b FROM prices") +
+          bytesOf(['srv_seen', 'srv_seen_day', 'sqlite_autoindex_srv_seen_1'], 'SELECT SUM(90 + length(store_product_id) + length(name) + COALESCE(length(image_url), 0)) AS b FROM srv_seen') +
+          sumOf(archives),
       },
       receipts: {
         count: Number(rc.n),
@@ -871,6 +929,13 @@ export function makeData(R) {
       const b = c.input();
       const rows = Array.isArray(b.rows) ? b.rows.slice(0, LIMITS.spendRows) : [];
       return answer(takeSpend(rows, actor.by));
+    }
+    // 0.11.0: what a phone's searches found, kept here too (the phone sends new rows a few minutes after a search).
+    if (path === '/api/v3/data/seen' && method === 'POST') {
+      if (actor?.type !== 'phone') throw new HttpError(403, 'forbidden', 'Phones send this.');
+      const b = c.input();
+      const rows = Array.isArray(b.rows) ? b.rows.slice(0, LIMITS.seenRows) : [];
+      return answer(takeSeen(rows, actor.by));
     }
     if (path === '/api/v3/data/export' && method === 'GET') {
       c.needWeb(actor);

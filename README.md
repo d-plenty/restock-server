@@ -2,7 +2,7 @@
 
 Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock, shows your spending and price history in its **Data** tab, and gives you Restock in a web browser on any computer and [on iPhone](#restock-on-iphone).
 
-**Works with Restock 0.9.4 to 0.10.12** on your phones. Use 0.10.12 on every phone to get everything in step (older phones keep syncing as before, but phones before 0.10.3 show Baby and Pets things in their Pantry until they're updated). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
+**Works with Restock 0.9.4 to 0.11.1** on your phones. Use 0.11.1 on every phone to get everything in step (older phones keep syncing as before, but phones before 0.10.3 show Baby and Pets things in their Pantry until they're updated). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
 
 > **Local first, always.** Every phone keeps its own full copy of what it shares. Your list, pantry and receipts work with no signal and with the server off; changes go up at the next sync. Only searching the shops needs the internet. **The server is optional:** a phone never needs it to work.
 
@@ -257,6 +257,8 @@ Each phone chooses, in **Your server → What this phone shares**: **Groceries**
 
 Turning something off stops sending it; what it already shared stays on the server, unless you tick **Also take what this phone shared off the server**, which deletes that phone's own shared things for that tab (other people's stay). Prices and product details found at the shops stay for the household: they're about the shops, not about you.
 
+**What searches found (0.11.0).** A phone on Restock 0.11.0 also sends what its searches and scans turned up: the product, the shop, its price that day, its barcode and whether it was in stock, whether or not it was added to anything. It's history about the shops, kept with the prices (the Data tab counts it as "from searches"), deleted with them by Delete data and Auto delete, and never sent on anywhere. It's never used as a current price. Phones before 0.11.0 don't send it.
+
 ## Home Assistant
 
 In a household on the server, the shopping list syncs with Home Assistant **from the server**, all the time, for every phone and browser: one list, one token. On the web page, open **Home Assistant**, enter the address you open Home Assistant with (for example `http://homeassistant.local:8123`, or `http://homeassistant:8123` for the Home Assistant app), paste a **long-lived access token** (your Home Assistant profile → Security), **Test connection**, pick the to-do list and turn it on. It syncs every minute and a few seconds after a phone changes the list.
@@ -368,12 +370,12 @@ Then run the same `docker run` command as before. Your data stays in the volume.
 - **TrueNAS:** *Apps*, select it, then *Update* (or *Edit → Save* to pull again).
 - **Home Assistant app:** *Settings → Apps*, open **Restock server**, then *Update*.
 
-Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.10.12`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
+Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.11.1`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
 
 ### Updating from 0.9.4
 
 1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.10.12.** Phones still on 0.10.11, 0.10.10, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
+2. **Update your phones to Restock 0.11.1.** Phones still on 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
 3. **Check Auto delete** in **Data → Manage data**. Your 0.9.4 **Keep data for** setting carries on as Auto delete (12 months unless you changed it).
 4. **Want to search the shops from the web page?** Run the [try-search script](#let-the-web-page-search-the-shops) to see which shops answer, then turn it on in Settings.
 

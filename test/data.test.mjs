@@ -559,6 +559,40 @@ describe('0.10.0: a phone sends its earlier spending', () => {
   });
 });
 
+describe('0.11.0: a phone sends what its searches found', () => {
+  test('kept one row a product and day, checked, counted and deleted with the prices, and only from a phone', async () => {
+    const { t, a } = await withPhone();
+    const day = (n) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+    const row = (id, d, extra = {}) => ({ chain: 'coles', store_product_id: id, day: d, name: 'Wheat biscuits 1.2kg', brand: 'Sanitarium', size: '1.2kg', barcode: '9300652010374', image_url: 'https://example.com/a.jpg', price: 7, was_price: 8.5, is_special: 1, member_only: 0, promo: null, in_stock: 1, ...extra });
+    const r = await a.req('POST', '/api/v3/data/seen', {
+      json: { rows: [row('123', day(21)), row('123', day(0), { price: 6.5, was_price: 3 }), row('demo-1', day(0)), row('456', day(0), { price: 0 }), row('789', '2026-13-45'), row('790', day(-9)), row('791', day(1), { chain: 'Not A Chain' }), row('792', day(1), { barcode: 'abc', image_url: 'javascript:1', in_stock: null })] },
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body, { added: 3, skipped: 5 });
+    assert.deepEqual(rows(t, 'SELECT store_product_id, day, price, was_price, barcode, image_url, in_stock FROM srv_seen ORDER BY store_product_id, day'), [
+      { store_product_id: '123', day: day(21), price: 7, was_price: 8.5, barcode: '9300652010374', image_url: 'https://example.com/a.jpg', in_stock: 1 },
+      { store_product_id: '123', day: day(0), price: 6.5, was_price: null, barcode: '9300652010374', image_url: 'https://example.com/a.jpg', in_stock: 1 },
+      { store_product_id: '792', day: day(1), price: 7, was_price: 8.5, barcode: null, image_url: null, in_stock: null },
+    ]);
+    // The same product and day again: the later reading replaces it.
+    const again = await a.req('POST', '/api/v3/data/seen', { json: { rows: [row('123', day(0), { price: 6 })] } });
+    assert.deepEqual(again.body, { added: 1, skipped: 0 });
+    assert.equal(rows(t, 'SELECT COUNT(*) AS n FROM srv_seen')[0].n, 3);
+    assert.equal(rows(t, `SELECT price FROM srv_seen WHERE store_product_id = '123' AND day = '${day(0)}'`)[0].price, 6);
+    // Only phones send it.
+    assert.equal((await t.web.req('POST', '/api/v3/data/seen', { json: { rows: [] } })).status, 403);
+    // Counted with the prices in what's stored.
+    const stored = await t.web.req('GET', '/api/v3/data/summary');
+    assert.equal(stored.status, 200, JSON.stringify(stored.body));
+    assert.equal(JSON.stringify(stored.body).includes('"searched":3'), true, JSON.stringify(stored.body).slice(0, 600));
+    // Deleted with the prices: everything older than a week ago.
+    const cut = new Date(Date.now() - 7 * 86_400_000).toISOString();
+    const dry = await t.web.req('POST', '/api/v3/data/delete', { json: { before: cut, kinds: ['prices'], dryRun: true } });
+    assert.equal(dry.status, 200, JSON.stringify(dry.body));
+    assert.equal(JSON.stringify(dry.body).includes('"prices":1'), true, JSON.stringify(dry.body));
+  });
+});
+
 describe('0.10.1: a phone can have its Your data figures and its spending sealed', () => {
   test('sealed answers with its nonce inside, sealed spending in, plain for older phones', async () => {
     const { t, a } = await withPhone();
