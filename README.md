@@ -2,7 +2,7 @@
 
 Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock, shows your spending and price history in its **Data** tab, and gives you Restock in a web browser on any computer and [on iPhone](#restock-on-iphone).
 
-**Works with Restock 0.9.4 to 0.12.2** on your phones. Use 0.12.2 on every phone to get everything in step (older phones keep syncing as before, but phones before 0.10.3 show Baby and Pets things in their Pantry until they're updated). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
+**Works with Restock 0.9.4 to 0.12.3** on your phones. Use 0.12.3 on every phone to get everything in step (older phones keep syncing as before, but phones before 0.10.3 show Baby and Pets things in their Pantry until they're updated). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
 
 > **Local first, always.** Every phone keeps its own full copy of what it shares. Your list, pantry and receipts work with no signal and with the server off; changes go up at the next sync. Only searching the shops needs the internet. **The server is optional:** a phone never needs it to work.
 
@@ -21,7 +21,7 @@ The pictures on this page use sample data: real products and prices, with a made
 1. [Start it](#1-start-it) (Docker, Compose, Dockge, Portainer, TrueNAS, or [as a Home Assistant app](#as-a-home-assistant-app-no-docker-needed))
 2. [Log in and set up the server](#2-log-in-and-set-up-the-server)
 3. [Add your phones](#3-add-your-phones)
-- [The web page](#the-web-page): Home, the Shopping list, Specials and catalogues, Undo and Save settings
+- [The web page](#the-web-page): Home, the Shopping list, Your shops, Undo and Save settings
 - [Restock on iPhone](#restock-on-iphone)
 - [Data](#data): charts, downloads, [Manage data](#manage-data) and [Auto delete](#auto-delete)
 - [Let the web page search the shops](#let-the-web-page-search-the-shops)
@@ -145,15 +145,13 @@ Sign in on any computer and you have Restock laid out for a big screen, from wha
 - **Home:** a greeting and the date, your Shopping list, and this week's specials on the things you buy.
 - **Shopping list:** Groceries, Bottle shop, Chemist and **General**, with the views **By shop · Aisle group · One list**. Click a line to open the item, with a big photo at the top; only the tick box ticks it off. Type in the add box to add from your pantry, or the words as they are.
 - **Pantry, Bottle shop and Chemist:** your items, their prices at each shop, and the history the server keeps.
-- **Specials and catalogues:** every shop you follow, with its website, specials and catalogue links, plus This week's specials and My catalogue from what your phones found. **Previous** and **Next** sit above and below a catalogue's pages (the arrow keys work too), and clicking a product opens it.
+- **Your shops:** every shop you follow, with how many of your household's things are on special there, **Your specials** (just the things you buy that are on special at that shop, from what your phones found) and the shop's own catalogue and website links. Home shows the same count for each shop.
 - **Pick my milk:** a line added as words (by Home Assistant, say) has a Pick button. If nothing in your pantry matches, it can [search the shops](#let-the-web-page-search-the-shops) for it, when that's turned on.
 - **Undo:** after a change, a big white **Undo** shows at the bottom of the sidebar (with Sync now and Sign out) for a few seconds. One click (or Ctrl+Z, Cmd+Z on a Mac) puts it all back, even after "Add all to my list".
 - **Save settings:** settings wait for the green **Save settings** button, at the top right of the page and at the bottom. Leaving with changes not saved asks first.
 - **Data:** see [Data](#data).
 
 <p align="center"><img src="docs/screenshots/web-list-light.png" alt="The Shopping list on the web, by shop, with the item panel open and its photo at the top" width="720"></p>
-
-<p align="center"><img src="docs/screenshots/web-specials-light.png" alt="Catalogues and specials: My catalogue, with Previous and Next above the page" width="720"></p>
 
 <p align="center"><img src="docs/screenshots/web-settings-light.png" alt="Settings on the web, with Save settings at the top right and Let the web page search the shops" width="720"></p>
 
@@ -372,12 +370,12 @@ Then run the same `docker run` command as before. Your data stays in the volume.
 - **TrueNAS:** *Apps*, select it, then *Update* (or *Edit → Save* to pull again).
 - **Home Assistant app:** *Settings → Apps*, open **Restock server**, then *Update*.
 
-Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.12.2`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
+Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.12.3`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
 
 ### Updating from 0.9.4
 
 1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.12.2.** Phones still on 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
+2. **Update your phones to Restock 0.12.3.** Phones still on 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
 3. **Check Auto delete** in **Data → Manage data**. Your 0.9.4 **Keep data for** setting carries on as Auto delete (12 months unless you changed it).
 4. **Want to search the shops from the web page?** Run the [try-search script](#let-the-web-page-search-the-shops) to see which shops answer, then turn it on in Settings.
 
