@@ -273,7 +273,7 @@ describe('the export', () => {
     const e = x.body;
     assert.equal(e.format, 'restock-export');
     assert.equal(e.v, 1);
-    assert.deepEqual(Object.keys(e.tables).sort(), ['aliases', 'categories', 'items', 'list', 'products', 'receipts', 'settings', 'shops', 'spending']);
+    assert.deepEqual(Object.keys(e.tables).sort(), ['aliases', 'categories', 'inventory', 'items', 'list', 'products', 'receipts', 'settings', 'shops', 'spending']);
     assert.deepEqual(e.tables.items[0].same_product_ids, ['p2']);
     assert.equal(e.tables.receipts[0].photos, 1);
     assert.equal(e.tables.receipts[0].text, undefined);

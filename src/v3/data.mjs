@@ -719,6 +719,7 @@ export function makeData(R) {
     const shops = new Map();
     const settings = {};
     const aliases = [];
+    const inventory = [];
     for (const r of raw.prepare('SELECT k, v FROM household_settings ORDER BY k').all()) {
       const v = jsonOr(r.v, r.v);
       if (r.k.startsWith('shop:')) {
@@ -739,6 +740,9 @@ export function makeData(R) {
         if (typeof v === 'string') aliases.push({ words: r.k.slice(6), item_id: v });
       } else if (r.k.startsWith('keep:') || r.k.startsWith('ha:')) {
         // The list's own rows (and which phone runs Home Assistant): not the household's data.
+      } else if (r.k.startsWith('have:')) {
+        // 0.13.1: inventory: how much of an item is at home (count, weight or volume, or a rough amount).
+        if (v && typeof v === 'object') inventory.push({ item_id: r.k.slice(5), counted_by: { c: 'number', w: 'weight or volume', r: 'rough amount' }[v.m] ?? null, amount: typeof v.a === 'number' ? v.a : null, unit: typeof v.u === 'string' ? v.u : null, low_at: typeof v.low === 'number' ? v.low : null });
       } else settings[r.k] = v;
     }
     const counts = {
@@ -757,7 +761,7 @@ export function makeData(R) {
       at: iso(),
       house: { name: S.house?.name ?? null },
       autoDelete: autoDelete(),
-      tables: { items, products, categories, list, receipts, shops: [...shops.values()], settings, aliases, spending: spendingMonths(0) },
+      tables: { items, products, categories, list, receipts, shops: [...shops.values()], settings, aliases, inventory, spending: spendingMonths(0) },
       paged: {
         prices: { count: counts.prices, path: '/api/v3/data/export/prices', limit: LIMITS.pageDefault },
         ticked: { count: counts.ticked, path: '/api/v3/data/export/ticked', limit: LIMITS.pageDefault },
