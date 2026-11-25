@@ -182,7 +182,8 @@ describe('0.15.0: a server still keeping a 0.9.3 household', () => {
       ['GET', '/api/v2/activity'],
     ])
       assert.equal((await t.browser().req(m, path, { json: m === 'GET' ? undefined : {} })).status, 404, `${m} ${path}`);
-    assert.ok([401, 404].includes((await p.join('x'.repeat(30))).status));
+    const join = await p.raw('POST', '/api/v2/devices', { json: { invite: 'x'.repeat(30), device: p.device, pub: p.keys.pub } });
+    assert.ok([401, 404].includes(join.status));
     assert.equal(t.state.mode, 'new');
   });
 });

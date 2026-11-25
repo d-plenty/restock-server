@@ -35,8 +35,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22.23'
       # The tests need the Restock core (core/restock-core.mjs), built from Restock at the Dockerfile's RESTOCK_REF.
@@ -63,7 +63,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Work out the image name and tags
         id: meta

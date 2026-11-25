@@ -11,7 +11,7 @@ import { startFakeHa } from './fake-ha.mjs';
 
 /** A first-start login with the Host header a browser would send for `host`. */
 function loginAs(base, host, password = 'admin') {
-  const u = new URL(base + '/api/v2/login');
+  const u = new URL(base + '/api/v3/account/login');
   const body = JSON.stringify({ user: 'admin', password });
   return new Promise((ok, no) => {
     const r = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { Host: host, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {

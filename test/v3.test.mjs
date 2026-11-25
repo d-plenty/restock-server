@@ -220,8 +220,9 @@ describe('browsers: challenge sign-in, MACs, sealed answers', () => {
     const r = await b.login('admin', PASS, ITER);
     assert.equal(r.status, 409);
     assert.equal(r.body.error, 'v3');
-    assert.equal((await b.post('/api/v2/invites')).status, 409);
-    assert.equal((await b.post('/api/v2/qrlogin')).status, 409);
+    // 0.15.1: the old v2 routes are gone altogether.
+    assert.equal((await b.post('/api/v2/invites')).status, 404);
+    assert.equal((await b.post('/api/v2/qrlogin')).status, 404);
   });
 
   test('Sign in with a phone: the phone approves, only the browser with the key can use the session', async () => {

@@ -1076,29 +1076,35 @@ export async function makeServer(cfg) {
     if (path.startsWith('/api/v1/')) throw new HttpError(410, 'gone', 'This server speaks API v2. Update Restock on this phone to 0.9.2 or newer.');
     // 0.15.0: a household from Restock 0.9.3 still kept the old way (v2) isn't served any more.
     if (S.mode === 'v2' && path !== '/api/v3/health') throw new HttpError(409, 'old-household', OLD_HOUSEHOLD);
-    if (path.startsWith('/api/v3/')) {
+    // 0.15.1: the account (the setup page's first sign-in, setting the passphrase, signing out) moved
+    // from /api/v2/ to /api/v3/account/. It's handled here, the rest of /api/v3/ by the house.
+    const account = path.startsWith('/api/v3/account/');
+    if (path.startsWith('/api/v3/') && !account) {
       if (!R) throw new HttpError(503, 'core', "This copy of the server was built without the Restock core. Rebuild it (see the README).");
       return R.v3.api(req, res, ip, url);
     }
-    if (!path.startsWith('/api/v2/')) throw new HttpError(404, 'not-found', 'Not found.');
-
-    // 0.9.4: once the household lives on the server (v3), phones on v2 are told to update (a
-    // 0.9.4 phone then upgrades with its v2 key); nothing else of v2 is served (no new v2 sign-ins,
-    // codes, links or vaults). 0.15.0: no files either.
-    if (S.mode === 'v3' || S.mode === 'released') {
+    if (path.startsWith('/api/v2/')) {
+      // A phone still on the 0.9.x protocol is told to update; nothing else of v2 is served.
       if (/^Restock2\s/.test(String(req.headers.authorization || ''))) {
         const d = /\bd=([A-Za-z0-9_-]{1,64})/.exec(String(req.headers.authorization))?.[1];
         const dev = d ? S.devices[d] : null;
         if (!dev || (dev.status && dev.status !== 'active')) throw new HttpError(401, 'removed', 'This phone was removed from the server. Add it again from the web page.');
         throw new HttpError(403, 'update', 'Update Restock to keep syncing with your server.', { api: 3 });
       }
+      throw new HttpError(404, 'not-found', 'Not found. (Restock 0.15.1 moved these to /api/v3/account/: reload the page.)');
+    }
+    if (!account) throw new HttpError(404, 'not-found', 'Not found.');
+
+    // Once the server is set up only these are open: the first sign-in and the first passphrase
+    // only before a passphrase is set (the house's own sign-in is /api/v3/login).
+    if (S.mode === 'v3' || S.mode === 'released') {
       const open =
-        (path === '/api/v2/login/salt' && method === 'GET') ||
-        (path === '/api/v2/login' && method === 'POST' && !S.account) ||
-        path === '/api/v2/logout' ||
-        (path === '/api/v2/passphrase' && method === 'POST' && !S.account) ||
-        (path === '/api/v2/web' && method === 'GET') ||
-        (path === '/api/v2/vault' && method === 'GET');
+        (path === '/api/v3/account/salt' && method === 'GET') ||
+        (path === '/api/v3/account/login' && method === 'POST' && !S.account) ||
+        path === '/api/v3/account/logout' ||
+        (path === '/api/v3/account/passphrase' && method === 'POST' && !S.account) ||
+        (path === '/api/v3/account/web' && method === 'GET') ||
+        (path === '/api/v3/account/vault' && method === 'GET');
       if (!open) throw new HttpError(409, 'v3', 'The server has moved on to the new Restock web app. Reload this page.', { api: 3 });
     }
 
@@ -1122,7 +1128,7 @@ export async function makeServer(cfg) {
     if (ph) actor = checkPhone(req, ph, body);
 
     // ---- web login ----
-    if (path === '/api/v2/login/salt' && method === 'GET') {
+    if (path === '/api/v3/account/salt' && method === 'GET') {
       const user = String(url.searchParams.get('user') ?? '').normalize('NFKC');
       const a = S.account;
       if (a && same(user, a.user)) return send(req, res, 200, { salt: a.salt });
@@ -1132,7 +1138,7 @@ export async function makeServer(cfg) {
       return send(req, res, 200, a ? { salt: fake } : { salt: fake, setup: true });
     }
 
-    if (path === '/api/v2/login' && method === 'POST') {
+    if (path === '/api/v3/account/login' && method === 'POST') {
       checkLock(ip);
       const b = json(body);
       const user = String(b.user ?? '').normalize('NFKC');
@@ -1179,7 +1185,7 @@ export async function makeServer(cfg) {
       return send(req, res, 200, { mustChange: false, vault: a.vault ?? null });
     }
 
-    if (path === '/api/v2/logout' && method === 'POST') {
+    if (path === '/api/v3/account/logout' && method === 'POST') {
       const b = json(body);
       if (b.everywhere) {
         if (actor.type !== 'web') throw new HttpError(401, 'auth', 'Sign in first.');
@@ -1194,7 +1200,7 @@ export async function makeServer(cfg) {
       return send(req, res, 200, { ok: true });
     }
 
-    if (path === '/api/v2/passphrase' && method === 'POST') {
+    if (path === '/api/v3/account/passphrase' && method === 'POST') {
       // First start: the setup session. After that only a passphrase session (not one signed in
       // with a phone), and only with the current passphrase's authKey: a stolen session cookie
       // can't take the account over.
@@ -1246,7 +1252,7 @@ export async function makeServer(cfg) {
       return send(req, res, 200, { ok: true, mustChange: false, webId: S.account.webId });
     }
 
-    if (path === '/api/v2/vault') {
+    if (path === '/api/v3/account/vault') {
       if (method === 'GET') {
         // Only for opening with the passphrase: a browser signed in with a phone has no use for it.
         need(actor, 'passphrase');
@@ -1266,7 +1272,7 @@ export async function makeServer(cfg) {
       }
     }
 
-    if (path === '/api/v2/web') {
+    if (path === '/api/v3/account/web') {
       if (method === 'GET') {
         need(actor, 'phone-or-session');
         const a = S.account;

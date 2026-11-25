@@ -123,10 +123,10 @@ describe('first start and the passphrase', () => {
     const t = await start({ user: 'sarah', password: 'first-start-pw' });
     const b = t.browser();
     // The salt says the server is still being set up (the page then sends the password).
-    assert.equal((await b.get('/api/v2/login/salt?user=sarah')).body.setup, true);
-    assert.equal((await b.post('/api/v2/login', { user: 'sarah', password: 'admin' })).status, 401);
-    assert.equal((await b.post('/api/v2/login', { user: 'admin', password: 'first-start-pw' })).status, 401);
-    const r = await b.post('/api/v2/login', { user: 'sarah', password: 'first-start-pw' });
+    assert.equal((await b.get('/api/v3/account/salt?user=sarah')).body.setup, true);
+    assert.equal((await b.post('/api/v3/account/login', { user: 'sarah', password: 'admin' })).status, 401);
+    assert.equal((await b.post('/api/v3/account/login', { user: 'admin', password: 'first-start-pw' })).status, 401);
+    const r = await b.post('/api/v3/account/login', { user: 'sarah', password: 'first-start-pw' });
     assert.equal(r.status, 200);
     assert.deepEqual(r.body, { mustChange: true, vault: null });
     const cookie = r.headers.get('set-cookie');
@@ -135,9 +135,9 @@ describe('first start and the passphrase', () => {
     assert.match(cookie, /Path=\//);
     assert.doesNotMatch(cookie, /Secure/);
     for (const [m, p] of [
-      ['GET', '/api/v2/vault'],
-      ['GET', '/api/v2/web'],
-      ['PUT', '/api/v2/web'],
+      ['GET', '/api/v3/account/vault'],
+      ['GET', '/api/v3/account/web'],
+      ['PUT', '/api/v3/account/web'],
     ]) {
       const x = await b.req(m, p, { json: m === 'GET' ? undefined : {} });
       assert.equal(x.status, 403, `${m} ${p}`);
@@ -149,7 +149,7 @@ describe('first start and the passphrase', () => {
     const MSG = 'Finish setting up Restock server from your home network first (or start it with your own RESTOCK_PASSWORD).';
     for (const trustProxy of [true, 'cloudflare', false]) {
       const t = await start({ trustProxy });
-      const login = (headers) => new Browser(t.base, { headers }).post('/api/v2/login', { user: 'admin', password: 'admin' });
+      const login = (headers) => new Browser(t.base, { headers }).post('/api/v3/account/login', { user: 'admin', password: 'admin' });
       // From outside, whatever a proxy header says, and even with RESTOCK_TRUST_PROXY.
       for (const h of [
         { 'X-Forwarded-For': '203.0.113.5' },
@@ -176,7 +176,7 @@ describe('first start and the passphrase', () => {
 
   test('with your own RESTOCK_PASSWORD the first login works from anywhere', async () => {
     const t = await start({ password: 'our-own-first-password' });
-    const r = await new Browser(t.base, { headers: { 'X-Forwarded-For': '203.0.113.5' } }).post('/api/v2/login', { user: 'admin', password: 'our-own-first-password' });
+    const r = await new Browser(t.base, { headers: { 'X-Forwarded-For': '203.0.113.5' } }).post('/api/v3/account/login', { user: 'admin', password: 'our-own-first-password' });
     assert.equal(r.status, 200);
     assert.equal(r.body.mustChange, true);
   });
@@ -195,8 +195,8 @@ describe('first start and the passphrase', () => {
     const b = t.browser();
     const { salt } = await b.setup({ passphrase: PASS, iterations: ITER });
     // The setup session carries on as a normal one.
-    assert.equal((await b.get('/api/v2/web')).status, 200);
-    assert.equal((await t.browser().post('/api/v2/login', { user: 'admin', password: 'admin' })).status, 401);
+    assert.equal((await b.get('/api/v3/account/web')).status, 200);
+    assert.equal((await t.browser().post('/api/v3/account/login', { user: 'admin', password: 'admin' })).status, 401);
     const state = JSON.parse(readFileSync(join(t.dir, 'state.json'), 'utf8'));
     const { auth } = derive(PASS, salt, ITER);
     assert.equal(state.account.salt, salt);
@@ -204,10 +204,10 @@ describe('first start and the passphrase', () => {
     assert.ok(!JSON.stringify(state).includes(auth), 'the authKey itself is never stored');
     assert.ok(!JSON.stringify(state).includes(PASS));
     // The real salt for the user; a stable fake one for anyone else, the same length.
-    const s1 = (await t.browser().get('/api/v2/login/salt?user=admin')).body;
+    const s1 = (await t.browser().get('/api/v3/account/salt?user=admin')).body;
     assert.deepEqual(s1, { salt });
-    const f1 = (await t.browser().get('/api/v2/login/salt?user=nobody')).body.salt;
-    const f2 = (await t.browser().get('/api/v2/login/salt?user=nobody')).body.salt;
+    const f1 = (await t.browser().get('/api/v3/account/salt?user=nobody')).body.salt;
+    const f2 = (await t.browser().get('/api/v3/account/salt?user=nobody')).body.salt;
     assert.equal(f1, f2);
     assert.notEqual(f1, salt);
     assert.equal(f1.length, salt.length);
@@ -216,14 +216,14 @@ describe('first start and the passphrase', () => {
   test('passphrase input is checked', async () => {
     const t = await start();
     const b = t.browser();
-    await b.post('/api/v2/login', { user: 'admin', password: 'admin' });
+    await b.post('/api/v3/account/login', { user: 'admin', password: 'admin' });
     const salt = b64u(randomBytes(16));
-    assert.equal((await b.post('/api/v2/passphrase', { salt: 'abc', auth: b64u(randomBytes(32)) })).status, 400);
-    assert.equal((await b.post('/api/v2/passphrase', { salt, auth: b64u(randomBytes(31)) })).status, 400);
-    assert.equal((await b.post('/api/v2/passphrase', { salt, auth: b64u(randomBytes(32)), vault: b64u(randomBytes(40)) })).status, 400);
-    assert.equal((await b.post('/api/v2/passphrase', { salt, auth: b64u(randomBytes(32)), webId: 'short', webPub: p256().pub })).status, 400);
-    assert.equal((await b.post('/api/v2/passphrase', { salt, auth: b64u(randomBytes(32)), webId: 'webBBBBBBBB', webPub: b64u(randomBytes(65)) })).status, 400);
-    assert.equal((await t.browser().post('/api/v2/passphrase', { salt, auth: b64u(randomBytes(32)) })).status, 401, 'needs a session');
+    assert.equal((await b.post('/api/v3/account/passphrase', { salt: 'abc', auth: b64u(randomBytes(32)) })).status, 400);
+    assert.equal((await b.post('/api/v3/account/passphrase', { salt, auth: b64u(randomBytes(31)) })).status, 400);
+    assert.equal((await b.post('/api/v3/account/passphrase', { salt, auth: b64u(randomBytes(32)), vault: b64u(randomBytes(40)) })).status, 400);
+    assert.equal((await b.post('/api/v3/account/passphrase', { salt, auth: b64u(randomBytes(32)), webId: 'short', webPub: p256().pub })).status, 400);
+    assert.equal((await b.post('/api/v3/account/passphrase', { salt, auth: b64u(randomBytes(32)), webId: 'webBBBBBBBB', webPub: b64u(randomBytes(65)) })).status, 400);
+    assert.equal((await t.browser().post('/api/v3/account/passphrase', { salt, auth: b64u(randomBytes(32)) })).status, 401, 'needs a session');
   });
 
   test('sign in with the passphrase, then the vault and the web key', async () => {
@@ -236,20 +236,20 @@ describe('first start and the passphrase', () => {
     const l = await b.login('admin', PASS, ITER);
     assert.equal(l.status, 200);
     assert.deepEqual(l.body, { mustChange: false, vault: null });
-    let w = (await b.get('/api/v2/web')).body;
+    let w = (await b.get('/api/v3/account/web')).body;
     assert.equal(w.webId, null);
     assert.equal(w.session.kind, 'passphrase');
     const k = p256();
-    assert.equal((await b.put('/api/v2/web', { webId: 'webCCCCCCCC', webPub: k.pub })).status, 200);
-    w = (await b.get('/api/v2/web')).body;
+    assert.equal((await b.put('/api/v3/account/web', { webId: 'webCCCCCCCC', webPub: k.pub })).status, 200);
+    w = (await b.get('/api/v3/account/web')).body;
     assert.equal(w.webId, 'webCCCCCCCC');
     assert.deepEqual(w.webs, [{ webId: 'webCCCCCCCC', webPub: k.pub }]);
     assert.equal(w.session.webId, 'webCCCCCCCC');
     const v = vault(l.vaultKey, { webId: 'webCCCCCCCC', webPriv: 'x', keys: {} });
-    assert.equal((await b.put('/api/v2/vault', { vault: v })).status, 200);
-    assert.equal((await b.put('/api/v2/vault', { vault: 'not a vault' })).status, 400);
-    assert.equal((await b.put('/api/v2/vault', { vault: b64u(Buffer.concat([Buffer.from('RSV2'), randomBytes(LIMITS.maxVault)])) })).status, 400, 'size cap');
-    assert.equal((await b.get('/api/v2/vault')).body.vault, v);
+    assert.equal((await b.put('/api/v3/account/vault', { vault: v })).status, 200);
+    assert.equal((await b.put('/api/v3/account/vault', { vault: 'not a vault' })).status, 400);
+    assert.equal((await b.put('/api/v3/account/vault', { vault: b64u(Buffer.concat([Buffer.from('RSV2'), randomBytes(LIMITS.maxVault)])) })).status, 400, 'size cap');
+    assert.equal((await b.get('/api/v3/account/vault')).body.vault, v);
     // The next sign-in gets the vault back.
     assert.equal((await t.browser().login('admin', PASS, ITER)).body.vault, v);
   });
@@ -261,18 +261,18 @@ describe('first start and the passphrase', () => {
     const salt = b64u(randomBytes(16));
     const NEW = 'paddock wombat silver anchor';
     const { auth } = derive(NEW, salt, ITER);
-    const current = derive(PASS, (await t.web.get('/api/v2/login/salt?user=admin')).body.salt, ITER).auth;
-    const same = await t.web.post('/api/v2/passphrase', { salt, auth, current, webId: 'webAAAAAAAA', webPub: p256().pub });
+    const current = derive(PASS, (await t.web.get('/api/v3/account/salt?user=admin')).body.salt, ITER).auth;
+    const same = await t.web.post('/api/v3/account/passphrase', { salt, auth, current, webId: 'webAAAAAAAA', webPub: p256().pub });
     assert.equal(same.status, 400);
     assert.equal(same.body.error, 'webId');
-    const r = await t.web.post('/api/v2/passphrase', { salt, auth, current, webId: 'webDDDDDDDD', webPub: p256().pub });
+    const r = await t.web.post('/api/v3/account/passphrase', { salt, auth, current, webId: 'webDDDDDDDD', webPub: p256().pub });
     assert.equal(r.status, 200);
-    assert.equal((await t.web.get('/api/v2/web')).status, 200, 'this browser carries on');
-    assert.equal((await other.get('/api/v2/web')).status, 401, 'the other one is signed out');
+    assert.equal((await t.web.get('/api/v3/account/web')).status, 200, 'this browser carries on');
+    assert.equal((await other.get('/api/v3/account/web')).status, 401, 'the other one is signed out');
     assert.equal((await t.browser().login('admin', PASS, ITER)).status, 401);
     assert.equal((await t.browser().login('admin', NEW, ITER)).status, 200);
     // The old webId can't come back.
-    assert.equal((await t.web.put('/api/v2/web', { webId: 'webAAAAAAAA', webPub: p256().pub })).status, 400);
+    assert.equal((await t.web.put('/api/v3/account/web', { webId: 'webAAAAAAAA', webPub: p256().pub })).status, 400);
   });
 
   test('10 wrong logins from one address lock it out for 15 minutes; others carry on', async () => {
@@ -292,26 +292,26 @@ describe('first start and the passphrase', () => {
 
   test('a page from another site gets nothing done with the session', async () => {
     const t = await ready();
-    const r = await t.web.req('POST', '/api/v2/passphrase', { json: {}, headers: { 'Sec-Fetch-Site': 'cross-site' } });
+    const r = await t.web.req('POST', '/api/v3/account/passphrase', { json: {}, headers: { 'Sec-Fetch-Site': 'cross-site' } });
     assert.equal(r.status, 403);
     assert.equal(r.body.error, 'forbidden');
-    assert.equal((await t.web.req('POST', '/api/v2/passphrase', { json: {}, headers: { 'Sec-Fetch-Site': 'same-origin' } })).status, 400, 'from the page itself it gets as far as the route');
+    assert.equal((await t.web.req('POST', '/api/v3/account/passphrase', { json: {}, headers: { 'Sec-Fetch-Site': 'same-origin' } })).status, 400, 'from the page itself it gets as far as the route');
   });
 
   test('Secure cookies on https behind a trusted proxy, not otherwise', async () => {
     const t = await start();
     const b = t.browser({ headers: { 'X-Forwarded-Proto': 'https' } });
-    const r = await b.post('/api/v2/login', { user: 'admin', password: 'admin' });
+    const r = await b.post('/api/v3/account/login', { user: 'admin', password: 'admin' });
     assert.match(r.headers.get('set-cookie'), /; Secure/);
     const u = await start({ trustProxy: false });
-    const r2 = await new Browser(u.base, { headers: { 'X-Forwarded-Proto': 'https' } }).post('/api/v2/login', { user: 'admin', password: 'admin' });
+    const r2 = await new Browser(u.base, { headers: { 'X-Forwarded-Proto': 'https' } }).post('/api/v3/account/login', { user: 'admin', password: 'admin' });
     assert.doesNotMatch(r2.headers.get('set-cookie'), /Secure/);
   });
 
   test('without RESTOCK_TRUST_PROXY a made-up X-Forwarded-For doesn\'t dodge the lockout', async () => {
     const t = await start({ trustProxy: false });
-    for (let i = 0; i < 10; i++) await new Browser(t.base, { ip: freshIp() }).post('/api/v2/login', { user: 'admin', password: 'nope' });
-    assert.equal((await new Browser(t.base, { ip: freshIp() }).post('/api/v2/login', { user: 'admin', password: 'admin' })).status, 429);
+    for (let i = 0; i < 10; i++) await new Browser(t.base, { ip: freshIp() }).post('/api/v3/account/login', { user: 'admin', password: 'nope' });
+    assert.equal((await new Browser(t.base, { ip: freshIp() }).post('/api/v3/account/login', { user: 'admin', password: 'admin' })).status, 429);
   });
 });
 
@@ -322,34 +322,34 @@ describe('sessions, sign out everywhere, activity, state', () => {
     await second.login('admin', PASS, ITER);
     const third = t.browser();
     await third.login('admin', PASS, ITER);
-    assert.equal((await third.post('/api/v2/logout')).status, 200);
-    assert.equal((await third.get('/api/v2/web')).status, 401);
-    assert.equal((await second.get('/api/v2/web')).status, 200, 'one sign-out leaves the others');
-    assert.equal((await t.browser().post('/api/v2/logout', { everywhere: true })).status, 401);
+    assert.equal((await third.post('/api/v3/account/logout')).status, 200);
+    assert.equal((await third.get('/api/v3/account/web')).status, 401);
+    assert.equal((await second.get('/api/v3/account/web')).status, 200, 'one sign-out leaves the others');
+    assert.equal((await t.browser().post('/api/v3/account/logout', { everywhere: true })).status, 401);
     // As the web app does it: a new webId and key in the vault, then sign out everywhere.
     const k = p256();
     const vk = (await t.web.login('admin', PASS, ITER)).vaultKey;
-    assert.equal((await t.web.put('/api/v2/vault', { vault: vault(vk, {}), webId: 'webEEEEEEEE', webPub: k.pub })).status, 200);
-    assert.equal((await t.web.post('/api/v2/logout', { everywhere: true })).status, 200);
-    const r = await second.get('/api/v2/web');
+    assert.equal((await t.web.put('/api/v3/account/vault', { vault: vault(vk, {}), webId: 'webEEEEEEEE', webPub: k.pub })).status, 200);
+    assert.equal((await t.web.post('/api/v3/account/logout', { everywhere: true })).status, 200);
+    const r = await second.get('/api/v3/account/web');
     assert.equal(r.status, 401);
     assert.equal(r.body.error, 'signed-out');
-    assert.equal((await t.web.get('/api/v2/web')).status, 401);
+    assert.equal((await t.web.get('/api/v3/account/web')).status, 401);
     const back = t.browser();
     await back.login('admin', PASS, ITER);
-    assert.equal((await back.put('/api/v2/web', { webId: 'webAAAAAAAA', webPub: p256().pub })).status, 400, 'the old webId is retired');
-    assert.equal((await back.put('/api/v2/vault', { vault: vault(vk, {}), webId: 'webAAAAAAAA', webPub: p256().pub })).status, 400);
-    assert.equal((await back.put('/api/v2/vault', { vault: vault(vk, {}), webId: 'webEEEEEEEE', webPub: k.pub })).status, 200, 'the current one is fine');
+    assert.equal((await back.put('/api/v3/account/web', { webId: 'webAAAAAAAA', webPub: p256().pub })).status, 400, 'the old webId is retired');
+    assert.equal((await back.put('/api/v3/account/vault', { vault: vault(vk, {}), webId: 'webAAAAAAAA', webPub: p256().pub })).status, 400);
+    assert.equal((await back.put('/api/v3/account/vault', { vault: vault(vk, {}), webId: 'webEEEEEEEE', webPub: k.pub })).status, 200, 'the current one is fine');
   });
 
   test('sessions expire after 30 days unused', async () => {
     const t = await ready();
     t.clock.shift += 29 * 24 * 3600_000;
-    assert.equal((await t.web.get('/api/v2/web')).status, 200);
+    assert.equal((await t.web.get('/api/v3/account/web')).status, 200);
     t.clock.shift += 29 * 24 * 3600_000;
-    assert.equal((await t.web.get('/api/v2/web')).status, 200, 'used, so it carries on');
+    assert.equal((await t.web.get('/api/v3/account/web')).status, 200, 'used, so it carries on');
     t.clock.shift += 31 * 24 * 3600_000;
-    const r = await t.web.get('/api/v2/web');
+    const r = await t.web.get('/api/v3/account/web');
     assert.equal(r.status, 401);
     assert.equal(r.body.error, 'signed-out');
   });
@@ -360,14 +360,14 @@ describe('sessions, sign out everywhere, activity, state', () => {
     const u = await start({}, t.dir);
     const web = new Browser(u.base, { ip: freshIp() });
     web.jar = t.web.jar;
-    assert.equal((await web.get('/api/v2/web')).status, 200, 'still signed in');
+    assert.equal((await web.get('/api/v3/account/web')).status, 200, 'still signed in');
     await stop(u);
     writeFileSync(join(t.dir, 'reset-passphrase'), '');
     const v = await start({}, t.dir);
     assert.ok(v.wasReset);
     assert.ok(!existsSync(join(t.dir, 'reset-passphrase')));
     web.base = v.base;
-    assert.equal((await web.get('/api/v2/web')).status, 401, 'signed out');
+    assert.equal((await web.get('/api/v3/account/web')).status, 401, 'signed out');
     assert.equal((await new Browser(v.base).raw('GET', '/')).headers.get('location'), '/setup/');
     const b = new Browser(v.base, { ip: freshIp() });
     await b.setup({ passphrase: 'new words for a new start', iterations: ITER, webId: 'webAAAAAAAA', webPub: p256().pub }).then(
@@ -413,7 +413,7 @@ describe('the setup page code', () => {
 // From the 0.9.2 security review: each of these failed before its fix.
 
 describe('security review', () => {
-  const currentAuth = async (t, b = t.web) => derive(PASS, (await b.get('/api/v2/login/salt?user=admin')).body.salt, ITER).auth;
+  const currentAuth = async (t, b = t.web) => derive(PASS, (await b.get('/api/v3/account/salt?user=admin')).body.salt, ITER).auth;
   const newPassphrase = (words = 'paddock wombat silver anchor') => {
     const salt = b64u(randomBytes(16));
     return { salt, auth: derive(words, salt, ITER).auth };
@@ -424,34 +424,34 @@ describe('security review', () => {
     const thief = new Browser(t.base, { ip: freshIp() });
     thief.jar = new Map(t.web.jar);
     const np = newPassphrase();
-    let r = await thief.post('/api/v2/passphrase', np);
+    let r = await thief.post('/api/v3/account/passphrase', np);
     assert.equal(r.status, 400);
     assert.equal(r.body.error, 'current');
-    r = await thief.post('/api/v2/passphrase', { ...np, current: b64u(randomBytes(32)) });
+    r = await thief.post('/api/v3/account/passphrase', { ...np, current: b64u(randomBytes(32)) });
     assert.equal(r.status, 403);
     assert.equal(r.body.error, 'current');
-    assert.equal((await t.web.get('/api/v2/web')).status, 200, 'nobody was signed out');
+    assert.equal((await t.web.get('/api/v3/account/web')).status, 200, 'nobody was signed out');
     assert.equal((await t.browser().login('admin', PASS, ITER)).status, 200, 'the passphrase is unchanged');
     // Wrong guesses count towards the lockout.
-    for (let i = 0; i < LIMITS.failsBeforeLockout; i++) await thief.post('/api/v2/passphrase', { ...np, current: b64u(randomBytes(32)) });
-    assert.equal((await thief.post('/api/v2/passphrase', { ...np, current: await currentAuth(t) })).status, 429);
+    for (let i = 0; i < LIMITS.failsBeforeLockout; i++) await thief.post('/api/v3/account/passphrase', { ...np, current: b64u(randomBytes(32)) });
+    assert.equal((await thief.post('/api/v3/account/passphrase', { ...np, current: await currentAuth(t) })).status, 429);
     // With the real one, from the owner's browser, it works.
-    assert.equal((await t.web.post('/api/v2/passphrase', { ...np, current: await currentAuth(t) })).status, 200);
+    assert.equal((await t.web.post('/api/v3/account/passphrase', { ...np, current: await currentAuth(t) })).status, 200);
   });
 
   test('setting the passphrase gives the browser a new session cookie; the setup one stops working', async () => {
     const t = await start();
     const b = t.browser();
-    await b.post('/api/v2/login', { user: 'admin', password: 'admin' });
+    await b.post('/api/v3/account/login', { user: 'admin', password: 'admin' });
     const setupCookie = b.cookie('restock_session');
     const sniffer = new Browser(t.base, { ip: freshIp() });
     sniffer.jar.set('restock_session', setupCookie);
-    const r = await b.raw('POST', '/api/v2/passphrase', { json: newPassphrase(PASS) });
+    const r = await b.raw('POST', '/api/v3/account/passphrase', { json: newPassphrase(PASS) });
     assert.equal(r.status, 200);
     assert.match(r.headers.get('set-cookie'), /Max-Age=2592000/, 'a 30-day cookie, not the setup one-hour one');
     assert.notEqual(b.cookie('restock_session'), setupCookie);
-    assert.equal((await b.get('/api/v2/web')).status, 200, 'this browser carries on');
-    assert.equal((await sniffer.get('/api/v2/web')).status, 401, 'the setup cookie is no good any more');
+    assert.equal((await b.get('/api/v3/account/web')).status, 200, 'this browser carries on');
+    assert.equal((await sniffer.get('/api/v3/account/web')).status, 401, 'the setup cookie is no good any more');
   });
 
   test('the compose file\'s placeholder password counts as a known one: first login only from home', async () => {
@@ -459,21 +459,21 @@ describe('security review', () => {
     assert.ok(isKnownPassword('admin'));
     assert.ok(!isKnownPassword('a5Gq-first-start-9'));
     const t = await start({ password: 'change-me-now' });
-    const away = await t.browser({ ip: '203.0.113.9' }).post('/api/v2/login', { user: 'admin', password: 'change-me-now' });
+    const away = await t.browser({ ip: '203.0.113.9' }).post('/api/v3/account/login', { user: 'admin', password: 'change-me-now' });
     assert.equal(away.status, 403);
     assert.equal(away.body.error, 'setup-remote');
-    assert.equal((await t.browser().post('/api/v2/login', { user: 'admin', password: 'change-me-now' })).status, 200, 'from home it works');
+    assert.equal((await t.browser().post('/api/v3/account/login', { user: 'admin', password: 'change-me-now' })).status, 200, 'from home it works');
   });
 
   test('a page on another port of the same computer (plain http, no Sec-Fetch-Site) can\'t post with the session', async () => {
     const t = await ready();
     for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x']) {
-      const r = await t.web.req('POST', '/api/v2/logout', { body: '{"everywhere":true}', headers: { 'Content-Type': type } });
+      const r = await t.web.req('POST', '/api/v3/account/logout', { body: '{"everywhere":true}', headers: { 'Content-Type': type } });
       assert.equal(r.status, 415, type);
     }
-    assert.equal((await t.web.req('POST', '/api/v2/passphrase', { body: '{}' })).status, 415, 'no type at all');
-    assert.equal((await t.web.get('/api/v2/web')).status, 200, 'still signed in');
-    assert.equal((await t.web.post('/api/v2/passphrase', {})).status, 400, 'JSON, as the web app sends, gets as far as the route');
+    assert.equal((await t.web.req('POST', '/api/v3/account/passphrase', { body: '{}' })).status, 415, 'no type at all');
+    assert.equal((await t.web.get('/api/v3/account/web')).status, 200, 'still signed in');
+    assert.equal((await t.web.post('/api/v3/account/passphrase', {})).status, 400, 'JSON, as the web app sends, gets as far as the route');
   });
 
   test('lockouts count an IPv6 /64 as one address', async () => {
@@ -500,7 +500,7 @@ describe('security review', () => {
     const PW = 'a5Gq-first-start-9';
     const t = await start({ password: PW }, undefined, host);
     // X-Forwarded-Proto doesn't make the cookie Secure (it would be lost on plain http)...
-    const r = await t.browser({ headers: { 'X-Forwarded-Proto': 'https' } }).raw('POST', '/api/v2/login', { json: { user: 'admin', password: PW } });
+    const r = await t.browser({ headers: { 'X-Forwarded-Proto': 'https' } }).raw('POST', '/api/v3/account/login', { json: { user: 'admin', password: PW } });
     assert.equal(r.status, 200);
     assert.doesNotMatch(r.headers.get('set-cookie'), /Secure/);
     await t.browser().setup({ password: PW, passphrase: PASS, iterations: ITER });

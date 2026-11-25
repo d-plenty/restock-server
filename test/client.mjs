@@ -89,19 +89,19 @@ export class Browser {
   }
   /** First start: the RESTOCK_USER / RESTOCK_PASSWORD login, then a passphrase. */
   async setup({ user = 'admin', password = 'admin', passphrase, iterations = 600000, webId, webPub } = {}) {
-    const l = await this.post('/api/v2/login', { user, password });
+    const l = await this.post('/api/v3/account/login', { user, password });
     if (l.status !== 200) throw new Error('setup login failed: ' + JSON.stringify(l.body));
     const salt = b64u(randomBytes(16));
     const { auth, vaultKey } = derive(passphrase, salt, iterations);
-    const p = await this.post('/api/v2/passphrase', { salt, auth, ...(webId ? { webId, webPub } : {}) });
+    const p = await this.post('/api/v3/account/passphrase', { salt, auth, ...(webId ? { webId, webPub } : {}) });
     if (p.status !== 200) throw new Error('setting the passphrase failed: ' + JSON.stringify(p.body));
     return { salt, auth, vaultKey };
   }
   /** Sign in with the passphrase. */
   async login(user, passphrase, iterations = 600000) {
-    const { salt } = (await this.get('/api/v2/login/salt?user=' + encodeURIComponent(user))).body;
+    const { salt } = (await this.get('/api/v3/account/salt?user=' + encodeURIComponent(user))).body;
     const { auth, vaultKey } = derive(passphrase, salt, iterations);
-    const r = await this.post('/api/v2/login', { user, auth });
+    const r = await this.post('/api/v3/account/login', { user, auth });
     return { ...r, vaultKey, salt, auth };
   }
 }
@@ -141,18 +141,6 @@ export class Phone {
     const r = await this.raw(method, path, opts);
     const type = r.headers.get('content-type') || '';
     return { status: r.status, headers: r.headers, body: type.startsWith('application/octet-stream') ? Buffer.from(await r.arrayBuffer()) : await asJson(r) };
-  }
-  /** Join with an invite from the web page. */
-  async join(invite) {
-    const r = await fetch(this.base + '/api/v2/devices', {
-      method: 'POST',
-      headers: { ...this.headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invite, device: this.device, name: this.name, pub: this.keys.pub }),
-    });
-    return { status: r.status, body: await asJson(r) };
-  }
-  put(name, body) {
-    return this.req('PUT', '/api/v2/files/' + name, { body });
   }
   get(path) {
     return this.req('GET', path);

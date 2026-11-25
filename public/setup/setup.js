@@ -35,7 +35,7 @@ $('login').addEventListener('submit', async (e) => {
   button.disabled = true;
   try {
     user = $('user').value.trim().normalize('NFKC');
-    const r = await post('/api/v2/login', { user, password: $('password').value });
+    const r = await post('/api/v3/account/login', { user, password: $('password').value });
     if (!r.ok) return showError(err, r.status === 401 ? 'Wrong user name or password.' : friendly(r));
     $('password').value = '';
     $('choose-user').value = user;
@@ -76,7 +76,7 @@ $('choose').addEventListener('submit', async (e) => {
   try {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const bits = await pbkdf2(new TextEncoder().encode($('pass').value.normalize('NFKC')), salt, 600000, 64);
-    const r = await post('/api/v2/passphrase', { salt: b64u(salt), auth: b64u(bits.subarray(0, 32)) });
+    const r = await post('/api/v3/account/passphrase', { salt: b64u(salt), auth: b64u(bits.subarray(0, 32)) });
     bits.fill(0);
     if (!r.ok) {
       if (r.status === 401 || r.data.error === 'signed-out') {
@@ -112,7 +112,7 @@ $('choose').addEventListener('submit', async (e) => {
 
 async function finish(health) {
   // Start the web app signed out, so it signs in with the passphrase itself.
-  await post('/api/v2/logout', {}).catch(() => {});
+  await post('/api/v3/account/logout', {}).catch(() => {});
   $('done-v3').hidden = !health.core || health.mode === 'v2';
   $('done-v2').hidden = health.mode !== 'v2';
   $('done-old').hidden = !!health.core;
