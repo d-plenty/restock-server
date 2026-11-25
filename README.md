@@ -2,7 +2,9 @@
 
 Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock, shows your spending and price history in its **Data** tab, and gives you Restock in a web browser on any computer and [on iPhone](#restock-on-iphone).
 
-**Works with Restock 0.9.4 to 0.14.1** on your phones (Android, iPhone and iPad). Use 0.14.1 on every phone to get everything in step (older phones keep syncing as before, but phones before 0.10.3 show Baby and Pets things in their Pantry until they're updated). A server that still keeps a household from Restock 0.9.2 or 0.9.3 carries on as before until you [hand it to the server](#already-using-the-server-with-restock-093).
+**Works with Restock 0.14.0 to 0.15.0** on your phones (Android, iPhone and iPad).
+
+> **Update every phone to Restock 0.14.0 or newer first.** From server 0.15.0, a phone on an older version is turned away with "Update Restock on this phone to 0.14.0 or newer to keep syncing". It keeps everything it has and works on its own until it's updated. The server's **Server and phones** page lists any phone that needs updating. A server that still keeps a household from Restock 0.9.2 or 0.9.3 has [one step first](#already-using-the-server-with-restock-093).
 
 > **Local first, always.** Every phone keeps its own full copy of what it shares. Your list, pantry and receipts work with no signal and with the server off; changes go up at the next sync. Only searching the shops needs the internet. **The server is optional:** a phone never needs it to work.
 
@@ -370,12 +372,12 @@ Then run the same `docker run` command as before. Your data stays in the volume.
 - **TrueNAS:** *Apps*, select it, then *Update* (or *Edit → Save* to pull again).
 - **Home Assistant app:** *Settings → Apps*, open **Restock server**, then *Update*.
 
-Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.14.1`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
+Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.15.0`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
 
 ### Updating from 0.9.4
 
 1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.14.1.** Phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
+2. **Update your phones to Restock 0.15.0** (0.14.0 or newer is a must: older phones are turned away). Before server 0.15.0, phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
 3. **Check Auto delete** in **Data → Manage data**. Your 0.9.4 **Keep data for** setting carries on as Auto delete (12 months unless you changed it).
 4. **Want to search the shops from the web page?** Run the [try-search script](#let-the-web-page-search-the-shops) to see which shops answer, then turn it on in Settings.
 
@@ -389,10 +391,15 @@ Good to know:
 
 ## Already using the server with Restock 0.9.3?
 
-Updating the server changes nothing on its own: it keeps your 0.9.3 household as it was, end-to-end encrypted, and phones and browsers carry on. When your phones have Restock 0.9.4 or newer:
+**From server 0.15.0 a household kept the 0.9.3 way isn't served any more.** The server finds it when it starts, says so in its log and on its web page, and does nothing else with it: nothing is deleted. To carry on:
 
-1. On the web page, sign in, open **Server and phones → Take this household**. A QR code appears (10 minutes, once).
-2. On the household's **owner phone**, open **Your server → Hand this household to the server** and scan it.
+1. Run **restock-server 0.14.1** once (`ghcr.io/d-plenty/restock-server:0.14.1`), with the same data folder.
+2. Put **Restock 0.14.1** on the household's owner phone.
+3. On the web page, sign in, open **Server and phones → Take this household**. A QR code appears (10 minutes, once).
+4. On the owner phone, open **Your server → Hand this household to the server** and scan it.
+5. Then update the server to 0.15.0, and every phone to 0.14.0 or newer.
+
+What the handover does, on 0.14.1:
 
 The owner phone seals the household's keys, its owner key and (if it runs it) Home Assistant to the server's key. The server checks them against the household before changing anything, then reads every phone's file into its own copy and becomes the owner. The other phones carry on without scanning anything: they update themselves to the server at their next sync. A phone still on 0.9.3 says *"Update Restock to keep syncing with your server"*, keeps everything it has and works on its own until you update it. What the household shares (its tabs and receipts) stays as it was until every phone in it is on 0.9.4 or newer, so a phone still on 0.9.3 never starts sharing more because of the move; after that each phone decides for itself ([what each phone shares](#what-each-phone-shares)).
 
@@ -478,7 +485,7 @@ Leave out your passphrase, recovery key, backup files, export files, addresses a
 
 ## For developers
 
-The protocol is in the Restock repo: [docs/server-protocol.md](https://github.com/d-plenty/Restock/blob/main/docs/server-protocol.md) (v2, "v3" for 0.9.4, and the 0.9.5 parts at the end: web search, Data and the `restock-export` format) and the design, [docs/server-v3-design.md](https://github.com/d-plenty/Restock/blob/main/docs/server-v3-design.md). v2 is served byte for byte while the server keeps a 0.9.3 household (`mode: "v2"`). v3, in short:
+The protocol is in the Restock repo: [docs/server-protocol.md](https://github.com/d-plenty/Restock/blob/main/docs/server-protocol.md) (v2, "v3" for 0.9.4, and the 0.9.5 parts at the end: web search, Data and the `restock-export` format) and the design, [docs/server-v3-design.md](https://github.com/d-plenty/Restock/blob/main/docs/server-v3-design.md). v2 (a 0.9.3 household's sealed files) is no longer served from 0.15.0: a server in `mode: "v2"` answers every request with what to do (`old-household`). The account routes under `/api/v2/` (passphrase, sign-in for the setup page) stay. v3, in short:
 
 | Method and path | Who |
 | --- | --- |
@@ -517,7 +524,7 @@ node scripts/try-search.mjs           # which shops answer this machine (asks ea
 
 `test/client.mjs` has v2 and v3 browsers and phones for tests against a real server; `test/fake-ha.mjs` is a pretend Home Assistant. `RESTOCK_TEST_CRASH=after-keys|after-db|after-mode` stops the server part-way through a handover (for the tests only).
 
-Build the image yourself: `docker build -t restock-server .` fetches Restock at the tag in the [Dockerfile](Dockerfile) (`RESTOCK_REF`) and builds the web app and the core. To build without fetching, run `npm run build:server-web` and `npm run build:server-core` in a Restock checkout, copy its `server/public/app/` and `server/core/` here, and run `docker build --build-arg WEB=local -t restock-server .`. Without a web app, the server still syncs phones and shows a short "web app not built" page; without the core it can only keep a 0.9.3 household.
+Build the image yourself: `docker build -t restock-server .` fetches Restock at the tag in the [Dockerfile](Dockerfile) (`RESTOCK_REF`) and builds the web app and the core. To build without fetching, run `npm run build:server-web` and `npm run build:server-core` in a Restock checkout, copy its `server/public/app/` and `server/core/` here, and run `docker build --build-arg WEB=local -t restock-server .`. Without a web app, the server still syncs phones and shows a short "web app not built" page; without the core it can't keep a household.
 
 Releases: bump `version` in `package.json`, `restock/config.yaml` and `restock/Dockerfile`, and `RESTOCK_REF` in the Dockerfile, then publish a GitHub release tagged `v<version>`. [The image workflow](.github/workflows/image.yml) checks they agree, builds for amd64 and arm64 and pushes `ghcr.io/d-plenty/restock-server:<version>` and `:latest`.
 

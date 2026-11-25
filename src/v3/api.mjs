@@ -19,7 +19,7 @@ import { checkPassphrase } from '../../public/setup/strength.js';
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 const b64u = (b) => Buffer.from(b).toString('base64url');
-const V3_LIMITS = { inviteMs: 10 * MIN, handoverMs: 10 * MIN, maxInvites: 20, maxJoinNonces: 5000 };
+const V3_LIMITS = { inviteMs: 10 * MIN, maxInvites: 20, maxJoinNonces: 5000 };
 
 /** Builds the v3 side on R (the helpers makeServer shares). Opens household.db when the mode is v3. */
 export async function makeV3(R) {
@@ -49,7 +49,6 @@ export async function makeV3(R) {
   const { house, merger, web, ha } = R;
 
   const invites = new Map(); // sha256(invite) -> { expires, used, label }
-  const handovers = new Map(); // sha256(token) -> { expires }
   const joinNonces = new Map(); // n -> at
 
   // ---------- on start ----------
@@ -67,7 +66,6 @@ export async function makeV3(R) {
     setInterval(() => {
       const t = now();
       for (const [k, v] of invites) if (v.expires < t) invites.delete(k);
-      for (const [k, v] of handovers) if (v.expires < t) handovers.delete(k);
       for (const [k, v] of joinNonces) if (t - v > 11 * MIN) joinNonces.delete(k);
       web.prune();
     }, MIN),
@@ -112,7 +110,7 @@ export async function makeV3(R) {
   function needMode(...modes) {
     if (!modes.includes(S.mode)) {
       if (S.mode === 'released') throw new HttpError(409, 'released', `Your household was taken back by ${S.releasedBy ?? 'a phone'}. Start the server afresh from its web page.`);
-      throw new HttpError(409, 'mode', S.mode === 'v2' ? 'This server still keeps a 0.9.3 household. Hand it to the server from the owner phone first.' : 'Set up this server first.', { mode: S.mode });
+      throw new HttpError(409, 'mode', S.mode === 'v2' ? R.OLD_HOUSEHOLD : 'Set up this server first.', { mode: S.mode });
     }
   }
   function needCore() {
@@ -196,11 +194,17 @@ export async function makeV3(R) {
     }
     return { f, dev };
   }
-  function checkPhone(req, ph, body) {
+  function checkPhone(req, ph, body, ownFile = false) {
     R.verifyPhone(req, ph.f, ph.dev.pub, body);
     if (ph.dev.status && ph.dev.status !== 'active') {
       throw new HttpError(401, 'removed', ph.dev.status === 'left' ? 'This phone left the household on the server.' : 'This phone was removed from the server.');
     }
+    // 0.15.0: phones older than 0.14.0 are told to update. A phone says its version in X-Restock-App
+    // (0.15.0 and newer); for one that doesn't, the version in its last summary. Its own file is
+    // still taken, so a phone that has just been updated gets its new summary in and is let back.
+    const told = String(req.headers['x-restock-app'] ?? '').trim().slice(0, 40);
+    const version = told || summaryOf(ph.f.d)?.summary?.version || '';
+    if (!ownFile && core?.appTooOld?.(version)) throw new HttpError(403, core.OLD_APP_ERROR, core.oldAppWords(), { min: core.MIN_APP, version });
     if (now() - (ph.dev.lastSeen || 0) > MIN) {
       ph.dev.lastSeen = now();
       R.st.saveSoon();
@@ -236,7 +240,8 @@ export async function makeV3(R) {
     // DELETE /api/v3/phones/<d> carries the passphrase proof (needConfirm); other DELETEs have no body.
     const withBody = method === 'POST' || method === 'PUT' || method === 'PATCH' || (method === 'DELETE' && path.startsWith('/api/v3/phones/'));
     const body = withBody ? await R.readBody(req, isFilePut ? R.maxFile : R.LIMITS.maxJson) : Buffer.alloc(0);
-    const actor = ph ? checkPhone(req, ph, body) : wh ? web.check(req, wh, body) : null;
+    const ownFile = isFilePut && !!ph && decodeURIComponent(path.slice('/api/v3/files/'.length)).includes(ph.f.d);
+    const actor = ph ? checkPhone(req, ph, body, ownFile) : wh ? web.check(req, wh, body) : null;
     if (actor?.type === 'web3') actor.sid = wh.f.s;
     const sealedIn = () => String(req.headers['content-type'] || '').startsWith(SEALED);
     const input = (opts) => (actor?.type === 'phone' && sealedIn() ? phoneSealed(body) : web.body(actor, req, body, opts));
@@ -324,65 +329,7 @@ export async function makeV3(R) {
       return R.send(req, res, 200, { ok: true, mode: S.mode, house: { name } });
     }
 
-    // ---------- the handover from an owner phone (section 7) ----------
-    if (path === '/api/v3/handover' && method === 'POST') {
-      const v2 = actor ? null : R.v2Session(req, res);
-      if (!actor && !(v2?.type === 'web' && v2.kind === 'passphrase')) throw new HttpError(401, 'auth', 'Sign in first.');
-      if (actor) needWeb(actor, 'passphrase');
-      needMode('v2');
-      needLoginKey();
-      if (!R.sqlite) throw new HttpError(503, 'node', 'Restock server needs Node 22.13 or newer.');
-      const t = b64u(randomBytes(32));
-      handovers.clear(); // one code at a time
-      handovers.set(b64u(R.sha256(Buffer.from(t))), { expires: now() + V3_LIMITS.handoverMs });
-      const p = new URLSearchParams({ u: R.origin(req) ?? '', t, k: house.kexPub() });
-      R.note('handover-code', { by: actor?.by ?? v2.by });
-      const out = { token: t, code: 'restock-handover:3?' + p.toString(), expires: iso(now() + V3_LIMITS.handoverMs), expiresIn: V3_LIMITS.handoverMs / 1000 };
-      return actor ? sealedAnswer(actor, 200, out, req, res) : R.send(req, res, 200, out);
-    }
-    if ((m = /^\/api\/v3\/handover\/([^/]+)$/.exec(path)) && method === 'POST') {
-      needPhone(actor, false);
-      if (S.mode === 'v3') throw new HttpError(409, 'done', 'This household already lives on the server.');
-      needMode('v2');
-      const tok = m[1];
-      const h = /^[A-Za-z0-9_-]{40,64}$/.test(tok) ? handovers.get(b64u(R.sha256(Buffer.from(tok)))) : null;
-      if (!h || h.expires < now()) throw new HttpError(h ? 410 : 404, h ? 'expired' : 'not-found', h ? 'That code has expired. Make a new one on the web page.' : "That code isn't on this server.");
-      handovers.delete(b64u(R.sha256(Buffer.from(tok))));
-      const b = R.json(body);
-      let payload;
-      try {
-        const key = core.handoverKey(house.kexPriv(), core.unb64(String(b.epub)), core.unb64(tok));
-        payload = core.openHandover(key, core.unb64(String(b.sealed)));
-      } catch {
-        throw new HttpError(400, 'sealed', "That handover couldn't be opened. Scan the server's code again.");
-      }
-      let c;
-      try {
-        const own = await fs.readFile(join(R.FILES, `restock-sync-${actor.device}.bin`)).catch(() => null);
-        if (!own) throw Object.assign(new Error("the owner phone's file isn't here"), { handover: true });
-        c = house.checkPayload(payload, actor.device, own);
-      } catch (e) {
-        if (!e.handover) throw e;
-        R.note('handover-refused', { by: actor.device, why: e.message });
-        throw new HttpError(409, 'handover', "The server couldn't check this household with what the phone sent. Nothing changed. Sync this phone with the server, then try again.");
-      }
-      const wasHouse = S.house;
-      try {
-        await house.commitHandover(c, actor.device);
-      } catch (e) {
-        // Stopped before the mode changed: rolled back now, as a restart would (the phone is still the
-        // owner and can try again), not left running in v2 with the house's keys and a half-built db.
-        if (S.mode !== 'v3') {
-          await house.recoverHandover();
-          S.house = wasHouse;
-          await R.st.save();
-        }
-        throw e;
-      }
-      S.handoverFrom = actor.device;
-      await R.st.save();
-      return R.send(req, res, 200, { ok: true, mode: S.mode, sid: S.sid, house: S.house.name });
-    }
+    // 0.15.0: the handover of a 0.9.3 household (v2) is gone (restock-server 0.14.1 still does it).
 
     // ---------- phones joining ----------
     if (path === '/api/v3/join' && method === 'POST') {
@@ -468,6 +415,8 @@ export async function makeV3(R) {
             added: iso(d.added),
             lastSeen: iso(d.lastSeen),
             version: sum?.summary?.version ?? null,
+            // 0.15.0: on a version this server no longer syncs with (the web page says to update it).
+            tooOld: !!core?.appTooOld?.(sum?.summary?.version),
             shares: R.engine.sharesOf(device),
             api: d.api ?? 2,
           };
@@ -910,7 +859,7 @@ export async function makeV3(R) {
     }
   }
 
-  return { api, close, invites, handovers };
+  return { api, close, invites };
 }
 
 export { DAY };

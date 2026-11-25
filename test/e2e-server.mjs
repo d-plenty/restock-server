@@ -4,7 +4,7 @@
 //
 //   node server/test/e2e-server.mjs                  fresh server, in setup mode (admin / admin)
 //   node server/test/e2e-server.mjs --ready          also sets a passphrase, and prints a signed-in
-//                                                    session cookie and a phone invite
+//                                                    session cookie
 //   node server/test/e2e-server.mjs --house "Our house"
 //                                                    0.9.4 (v3): also sets up a house on it, and prints
 //                                                    a v3 session (id and key) and an Add a phone code
@@ -13,7 +13,7 @@
 //
 // The last line printed is one line of JSON starting with "E2E " for scripts to read:
 //   E2E {"url":"http://127.0.0.1:41234","port":41234,"dir":"...","user":"admin",...}
-// With --ready, type "invite" and Enter for another invite (printed the same way).
+// With --house, type "invite" and Enter for another Add a phone code (printed the same way).
 
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -69,17 +69,13 @@ if (houseName && web) {
   out.sessionKey = Buffer.from(web3.key).toString('base64url');
   console.log(`  House "${houseName}" set up (srv-${s.state.sid}). v3 session: ${out.session}`);
 }
+// 0.15.0: phones join a house only (the 0.9.3 household's invites are gone).
 async function invite() {
-  if (web3) {
-    const r = await web3.post('/api/v3/phones', { label: 'Test phone' });
-    console.log(`  Add a phone (10 minutes, one phone): ${r.body.code}`);
-    return { invite: new URLSearchParams(r.body.code.split('?')[1]).get('i'), code: r.body.code };
-  }
-  const r = await web.post('/api/v2/invites');
-  console.log(`  Invite (10 minutes, one phone): ${r.body.code}`);
-  return r.body;
+  const r = await web3.post('/api/v3/phones', { label: 'Test phone' });
+  console.log(`  Add a phone (10 minutes, one phone): ${r.body.code}`);
+  return { invite: new URLSearchParams(r.body.code.split('?')[1]).get('i'), code: r.body.code };
 }
-if (web) {
+if (web3) {
   const i = await invite();
   out.invite = i.invite;
   out.code = i.code;

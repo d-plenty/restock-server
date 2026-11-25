@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { request } from 'node:http';
 import { nodeProblem, VERSION } from '../src/server.mjs';
 import { parseNameV3 } from '../src/names.mjs';
-import { start, house, addPhone, ent, item, line, rows, SHARE_PANTRY, SHARE_ALL, ITER, PASS, core, b64u, codeFields, V3Phone } from './helpers.mjs';
+import { start, stop, house, addPhone, ent, item, line, rows, SHARE_PANTRY, SHARE_ALL, ITER, PASS, core, b64u, codeFields, V3Phone } from './helpers.mjs';
 const PKG_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 const DAY = 86_400_000;
@@ -58,7 +58,7 @@ describe('modes, health and setting up', () => {
     assert.equal((await t.web.post('/api/v3/setup', { name: 'Again' })).status, 409);
   });
 
-  test("the setup page's cookie session can Set up; nobody else can; not in v2 mode", async () => {
+  test("the setup page's cookie session can Set up; nobody else can", async () => {
     const t = await start();
     const b = t.browser();
     assert.equal((await b.post('/api/v3/setup', { name: 'X' })).status, 401);
@@ -69,28 +69,7 @@ describe('modes, health and setting up', () => {
     const r = await b.post('/api/v3/setup', { name: 'Our place' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.deepEqual(r.body, { ok: true, mode: 'v3', house: { name: 'Our place' } });
-
-    const t2 = await start();
-    const b2 = t2.browser();
-    await b2.setup({ passphrase: PASS, iterations: ITER });
-    const p = t2.phone();
-    await b2.login('admin', PASS, ITER);
-    const inv = (await b2.post('/api/v2/invites')).body;
-    assert.equal((await p.join(inv.invite)).status, 200);
-    assert.equal(t2.state.mode, 'v2');
-    const s = await b2.post('/api/v3/setup', { name: 'X' });
-    assert.equal(s.status, 409);
-    assert.equal(s.body.error, 'mode');
-  });
-
-  test('the mode on a 0.9.3 server that phones use is v2', async () => {
-    const t = await start();
-    const b = t.browser();
-    await b.setup({ passphrase: PASS, iterations: ITER });
-    await b.login('admin', PASS, ITER);
-    const inv = (await b.post('/api/v2/invites')).body;
-    assert.equal((await t.phone().join(inv.invite)).status, 200);
-    assert.equal(t.state.mode, 'v2');
+    // (A server still keeping a 0.9.3 household can't: signed.test.mjs.)
   });
 
   test('the Node version check', () => {
@@ -756,5 +735,47 @@ describe('taken back, brought in, and the pages', () => {
     assert.match(csp, /img-src 'self' data: blob: https:\/\/\*\.woolworths\.media https:\/\/productimages\.coles\.com\.au/);
     assert.doesNotMatch(csp, /img-src[^;]* https:(;| )/);
     assert.match(csp, /connect-src 'self'/);
+  });
+});
+
+describe('0.15.0: phones older than 0.14.0 are told to update', () => {
+  const summary = (version) => ({ v: 1, version });
+  test('a phone that says it is too old is turned away with words to show; its own file is still taken', async () => {
+    const t = await house();
+    try {
+      const p = await addPhone(t, 'Old');
+      p.headers['X-Restock-App'] = '0.13.1';
+      const r = await p.get('/api/v3/files');
+      assert.equal(r.status, 403);
+      assert.equal(r.body.error, 'old-app');
+      assert.match(r.body.message, /Update Restock on this phone to 0\.14\.0 or newer/);
+      assert.equal((await p.putOwn(p.file([], { summary: summary('0.13.1') }))).status, 200);
+      p.headers['X-Restock-App'] = '0.14.0';
+      assert.equal((await p.get('/api/v3/files')).status, 200);
+      p.headers['X-Restock-App'] = '0.15.0';
+      assert.equal((await p.get('/api/v3/files')).status, 200);
+    } finally {
+      await stop(t);
+    }
+  });
+
+  test('a phone that says nothing is judged by its last summary, and let back once its new one is in', async () => {
+    const t = await house();
+    try {
+      const p = await addPhone(t, 'Updated later');
+      assert.equal((await p.get('/api/v3/files')).status, 200, 'no summary yet: not judged');
+      assert.equal((await p.putOwn(p.file([], { summary: summary('0.13.1') }))).status, 200);
+      await t.settle();
+      assert.equal((await p.get('/api/v3/files')).status, 403);
+      const phones = (await t.web.get('/api/v3/phones')).body.phones;
+      assert.equal(phones.find((x) => x.device === p.device).tooOld, true);
+      // Updated to 0.14.x (which doesn't say its version): its own file goes in with the new summary.
+      assert.equal((await p.putOwn(p.file([], { summary: summary('0.14.1') }))).status, 200);
+      await t.settle();
+      assert.equal((await p.get('/api/v3/files')).status, 200);
+      assert.equal((await t.web.get('/api/v3/phones')).body.phones.find((x) => x.device === p.device).tooOld, false);
+    } finally {
+      await stop(t);
+    }
   });
 });

@@ -1,12 +1,11 @@
-// Shared by the v3 tests: servers on temp folders, a house that's set up, phones that join, a 0.9.3
-// household (v2) for the handover, and a few entry makers.
+// Shared by the v3 tests: servers on temp folders, a house that's set up, phones that join, and a
+// few entry makers.
 
 import { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { makeServer, config } from '../src/server.mjs';
 import { Browser, Phone, V3Phone, V3Browser, core, b64u, codeFields } from './client.mjs';
 
@@ -94,73 +93,5 @@ export const SHARE_ALL = { tabs: ['pantry', 'keg', 'pharmacy'], receipts: true, 
 
 /** Rows of household.db. */
 export const rows = (t, sql, ...args) => t.R.merger.raw().prepare(sql).all(...args).map((r) => ({ ...r }));
-
-// ---------- a 0.9.3 household on a v2 server, for the handover ----------
-
-/**
- * A server in v2 mode with a 0.9.3-style household: the owner phone (owner key, household key,
- * its file with the signed owner rows), another member phone, and a signed-in v2 browser.
- */
-export async function v2Household(over = {}, dir) {
-  const t = await start(over, dir);
-  const web = t.browser();
-  await web.setup({ passphrase: PASS, iterations: ITER });
-  const l = await web.login('admin', PASS, ITER);
-  assert.equal(l.status, 200);
-  const hh = { key: randomBytes(32), keyv: 1, owner: core.newJavaKeyPair(), hid: 'hid' + b64u(randomBytes(6)) };
-  hh.serverKey = core.serverKeyOf(hh.key);
-  const owner = t.phone3({ name: 'Declan' });
-  const other = t.phone3({ name: 'Sarah' });
-  for (const p of [owner, other]) {
-    const inv = (await web.post('/api/v2/invites')).body;
-    assert.equal((await Phone.prototype.join.call(p, inv.invite)).status, 200);
-  }
-  const sign = (e) => ({ ...e, sig: core.signWithPkcs8(hh.owner.priv, core.signedText(e)) });
-  const now = Date.now();
-  let n = 0;
-  const hhEntry = (k, v) => sign(ent('household', k, now - 100000 + n++, owner.device, { k, v }));
-  const entries = [
-    hhEntry('owner_pub', hh.owner.pub),
-    hhEntry('owner', owner.device),
-    hhEntry('name', 'The Plenty house'),
-    hhEntry('hid', hh.hid),
-    hhEntry('tabs', 'pantry'),
-    hhEntry('receipts', '0'),
-    hhEntry('member:' + owner.device, JSON.stringify({ name: 'Declan', pub: owner.my.pub })),
-    hhEntry('member:' + other.device, JSON.stringify({ name: 'Sarah', pub: other.my.pub })),
-    ent('items', 'i-milk', now - 5000, owner.device, item('i-milk', 'pantry', 'Milk')),
-    ent('list_entries', 'l-milk', now - 5000, owner.device, line('l-milk', 'Milk', { item_id: 'i-milk' })),
-  ];
-  const ownFile = { format: 'restock-sync', v: 1, device: owner.device, name: 'Declan', keyv: 1, at: new Date().toISOString(), top: entries.length, seen: {}, entries };
-  const put = await owner.req('PUT', `/api/v2/files/restock-sync-${owner.device}.bin`, { body: Buffer.from(core.sealRsf1(hh.serverKey, ownFile)) });
-  assert.equal(put.status, 200, JSON.stringify(put.body));
-  const otherFile = { format: 'restock-sync', v: 1, device: other.device, name: 'Sarah', keyv: 1, at: new Date().toISOString(), top: 1, seen: {}, entries: [ent('items', 'i-bread', now - 4000, other.device, item('i-bread', 'pantry', 'Bread'))] };
-  assert.equal((await other.req('PUT', `/api/v2/files/restock-sync-${other.device}.bin`, { body: Buffer.from(core.sealRsf1(hh.serverKey, otherFile)) })).status, 200);
-  return { ...t, web, hh, owner, other, sign };
-}
-
-/** The owner phone's handover payload (RSH3), sealed to the code's kex key with its token. */
-export function handoverBody(code, hh, owner, { key = hh.key, ownerKey = hh.owner, ha } = {}) {
-  const f = codeFields(code);
-  const e = core.newEcdhKey();
-  const payload = {
-    format: 'restock-handover',
-    v: 3,
-    key: b64u(key),
-    keyv: hh.keyv,
-    serverKeys: { [hh.keyv]: b64u(hh.serverKey) },
-    owner_priv: ownerKey.priv,
-    owner_pubkey: ownerKey.pub,
-    owner_secrets: { other: b64u(randomBytes(32)) },
-    secret: b64u(randomBytes(32)),
-    recovery: core.base32(randomBytes(20)),
-    recovery_saved: true,
-    hid: hh.hid,
-    name: 'The Plenty house',
-    ...(ha ? { ha } : {}),
-  };
-  const sealed = core.sealHandover(core.handoverKey(e.priv, core.unb64(f.k), core.unb64(f.t)), payload);
-  return { token: f.t, kex: f.k, json: { epub: b64u(e.pub), sealed: b64u(sealed) } };
-}
 
 export { core, b64u, codeFields, Browser, Phone, V3Phone, V3Browser };

@@ -870,7 +870,6 @@ export function makeData(R) {
     S.house = null;
     S.mode = 'new';
     R.v3?.invites.clear();
-    R.v3?.handovers.clear();
     await R.st.save();
     R.note('deleted-everything', { by, phones: phones.length });
     return { ok: true, mode: S.mode, phones: phones.length };

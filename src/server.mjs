@@ -24,21 +24,22 @@ import { join, extname, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openState, atomicWrite, atomicWriteSync, dict } from './state.mjs';
 import { serverZone } from './zone.mjs';
-import { parseName, parseNameV3, canWrite, bodyOk, reservedDevice, DEVICE, WEB_ID, FOLDERS, FOLDERS_V3 } from './names.mjs';
+import { parseName, parseNameV3, DEVICE, WEB_ID, FOLDERS, FOLDERS_V3 } from './names.mjs';
 import { loadCore } from './v3/core.mjs';
 import { makeV3 } from './v3/api.mjs';
-import { walkNames, sqliteModule } from './v3/merge.mjs';
+import { sqliteModule } from './v3/merge.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8')).version;
+/** 0.15.0: what a server still keeping a 0.9.3 household (v2) says, on every request and at start. */
+export const OLD_HOUSEHOLD =
+  'This server still keeps a household from Restock 0.9.3, which this version no longer does. Run restock-server 0.14.1 once, hand the household to it from the owner phone (Settings, Sync and backups, Your Restock server), then update to this version.';
 const PUBLIC = resolve(HERE, '..', 'public');
 
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 export const LIMITS = {
   inviteMs: 10 * MIN,
-  linkMs: 10 * MIN,
-  qrLoginMs: 2 * MIN,
   skewMs: 5 * MIN,
   nonceMs: 11 * MIN, // a little over the 10 the contract asks for, so a request at the edge of the window can't come back
   sessionMs: 30 * DAY, // unused
@@ -340,7 +341,6 @@ export async function makeServer(cfg) {
   const SETUP = join(PUBLIC, 'setup');
   const maxFile = Math.max(1, cfg.maxFileMb) * 1024 * 1024;
   const maxTotal = Math.max(1, cfg.maxTotalMb) * 1024 * 1024;
-  const started = new Date(now()).toISOString();
 
   const st = openState(DATA, TMP, log);
   const S = st.data;
@@ -423,13 +423,9 @@ export async function makeServer(cfg) {
   }
 
   // ---- short-lived things, kept in memory only ----
-  const invites = new Map(); // sha256(invite) -> { expires, used }
-  const relays = new Map(); // id -> { kind: 'link'|'qrlogin', expires, owner (session hash) | poll (sha256), answer }
   const nonces = new Map(); // device:n -> seen at
   const pruner = setInterval(() => {
     const t = now();
-    for (const [k, v] of invites) if (v.expires < t) invites.delete(k);
-    for (const [k, v] of relays) if (v.expires < t) relays.delete(k);
     for (const [k, v] of nonces) if (t - v > LIMITS.nonceMs) nonces.delete(k);
     for (const [k, v] of fails) if (t - v.from > LIMITS.lockoutMs && v.until < t) fails.delete(k);
     for (const [k, v] of fetchNoted) if (t - v > 60 * MIN) fetchNoted.delete(k);
@@ -442,7 +438,6 @@ export async function makeServer(cfg) {
 
   // ---- sessions ----
   const COOKIE = 'restock_session';
-  const QR_COOKIE = 'restock_qr';
   function sessionLife(s) {
     return s.kind === 'setup' ? LIMITS.setupSessionMs : s.kind === 'phone' ? LIMITS.phoneSessionMs : LIMITS.sessionMs;
   }
@@ -765,7 +760,8 @@ export async function makeServer(cfg) {
   // Forget who wrote files that are gone.
   for (const k of Object.keys(S.files)) if (!sizes.has(k)) delete S.files[k];
   // 0.9.4: the mode, on the first start of 0.9.4: a server phones already use keeps their household
-  // as it is (v2) until its owner phone hands it over; an empty one is new.
+  // as it is (v2) until its owner phone hands it over; an empty one is new. 0.15.0: a v2 one is no
+  // longer served (OLD_HOUSEHOLD): it's handed over with restock-server 0.14.1 first.
   if (!S.mode) {
     const used = Object.keys(S.devices).length > 0 || [...sizes.keys()].some((n) => parseName(n)?.kind === 'sync');
     S.mode = used ? 'v2' : 'new';
@@ -1068,32 +1064,6 @@ export async function makeServer(cfg) {
     if (!S.retiredWebIds.includes(id)) S.retiredWebIds.push(id);
     if (S.retiredWebIds.length > 500) S.retiredWebIds = S.retiredWebIds.slice(-500);
   }
-  function relayAnswer(body, actor) {
-    if (!p256Key(body.pub)) throw new HttpError(400, 'pub', "The phone's key isn't a P-256 public key.");
-    const sealed = unb64(body.sealed);
-    if (!sealed || sealed.length < 28 || sealed.length > LIMITS.maxSealed) throw new HttpError(400, 'sealed', "That isn't a sealed answer.");
-    return { pub: body.pub, sealed: body.sealed, device: actor.device, deviceName: S.devices[actor.device]?.name ?? null };
-  }
-  function relay(id, kind) {
-    if (!/^[A-Za-z0-9_-]{20,64}$/.test(id)) throw new HttpError(404, 'not-found', "That code isn't on this server.");
-    const r = relays.get(id);
-    if (!r || r.kind !== kind) throw new HttpError(404, 'not-found', "That code isn't on this server.");
-    if (r.expires < now()) {
-      relays.delete(id);
-      throw new HttpError(410, 'expired', 'That code has expired. Make a new one.');
-    }
-    return r;
-  }
-  function makeRelay(kind, extra) {
-    if (relays.size >= LIMITS.maxRelays) {
-      for (const [k, v] of relays) if (v.expires < now()) relays.delete(k);
-      if (relays.size >= LIMITS.maxRelays) throw new HttpError(429, 'busy', 'Too many codes waiting. Try again in a few minutes.');
-    }
-    const id = token(16);
-    const ms = kind === 'link' ? LIMITS.linkMs : LIMITS.qrLoginMs;
-    relays.set(id, { kind, expires: now() + ms, answer: null, ...extra });
-    return { id, expires: new Date(now() + ms).toISOString(), expiresIn: Math.round(ms / 1000) };
-  }
   function signOutPhoneSessions(device) {
     for (const [k, s] of Object.entries(S.sessions)) if (s.kind === 'phone' && s.device === device) delete S.sessions[k];
   }
@@ -1104,6 +1074,8 @@ export async function makeServer(cfg) {
 
     if (path === '/api/v2/health' && (method === 'GET' || method === 'HEAD')) return send(req, res, 200, { ok: true, app: 'restock-server', version: VERSION, api: 2 });
     if (path.startsWith('/api/v1/')) throw new HttpError(410, 'gone', 'This server speaks API v2. Update Restock on this phone to 0.9.2 or newer.');
+    // 0.15.0: a household from Restock 0.9.3 still kept the old way (v2) isn't served any more.
+    if (S.mode === 'v2' && path !== '/api/v3/health') throw new HttpError(409, 'old-household', OLD_HOUSEHOLD);
     if (path.startsWith('/api/v3/')) {
       if (!R) throw new HttpError(503, 'core', "This copy of the server was built without the Restock core. Rebuild it (see the README).");
       return R.v3.api(req, res, ip, url);
@@ -1111,8 +1083,8 @@ export async function makeServer(cfg) {
     if (!path.startsWith('/api/v2/')) throw new HttpError(404, 'not-found', 'Not found.');
 
     // 0.9.4: once the household lives on the server (v3), phones on v2 are told to update (a
-    // 0.9.4 phone then upgrades with its v2 key); a 0.9.3 browser tab still open keeps its session
-    // for files; nothing else of v2 is served (no new v2 sign-ins, codes, links or vaults).
+    // 0.9.4 phone then upgrades with its v2 key); nothing else of v2 is served (no new v2 sign-ins,
+    // codes, links or vaults). 0.15.0: no files either.
     if (S.mode === 'v3' || S.mode === 'released') {
       if (/^Restock2\s/.test(String(req.headers.authorization || ''))) {
         const d = /\bd=([A-Za-z0-9_-]{1,64})/.exec(String(req.headers.authorization))?.[1];
@@ -1125,16 +1097,13 @@ export async function makeServer(cfg) {
         (path === '/api/v2/login' && method === 'POST' && !S.account) ||
         path === '/api/v2/logout' ||
         (path === '/api/v2/passphrase' && method === 'POST' && !S.account) ||
-        path === '/api/v2/files' ||
-        path.startsWith('/api/v2/files/') ||
         (path === '/api/v2/web' && method === 'GET') ||
         (path === '/api/v2/vault' && method === 'GET');
       if (!open) throw new HttpError(409, 'v3', 'The server has moved on to the new Restock web app. Reload this page.', { api: 3 });
     }
 
     // Who's asking. A phone's header is checked before its body is read; the signature after.
-    const isFilePut = method === 'PUT' && path.startsWith('/api/v2/files/');
-    const max = isFilePut ? maxFile : LIMITS.maxJson;
+    const max = LIMITS.maxJson;
     const ph = phoneHeader(req);
     let actor = ph ? null : webActor(req, res) ?? { type: 'none' };
     // A page from another site can't change anything with this browser's session.
@@ -1149,8 +1118,6 @@ export async function makeServer(cfg) {
         throw new HttpError(415, 'forbidden', 'Send JSON (Content-Type: application/json).');
       }
     }
-    // Nobody signed in can't send a big file: refused before it's read.
-    if (isFilePut && !ph) need(actor, 'phone-or-session');
     const body = method === 'POST' || method === 'PUT' ? await readBody(req, max) : Buffer.alloc(0);
     if (ph) actor = checkPhone(req, ph, body);
 
@@ -1217,7 +1184,6 @@ export async function makeServer(cfg) {
       if (b.everywhere) {
         if (actor.type !== 'web') throw new HttpError(401, 'auth', 'Sign in first.');
         S.sessions = dict();
-        relays.clear();
         await st.save();
         note('signed-out-everywhere', { by: actor.by });
       } else if (actor.type === 'web') {
@@ -1275,7 +1241,6 @@ export async function makeServer(cfg) {
       S.sessions = dict();
       res.cookies.length = 0;
       newSession(req, res, 'passphrase', { ip: mask(ip) });
-      relays.clear();
       await st.save();
       note(first ? 'passphrase-set' : 'passphrase-changed', { by: S.account.webId ? 'web-' + S.account.webId : 'web' });
       return send(req, res, 200, { ok: true, mustChange: false, webId: S.account.webId });
@@ -1324,197 +1289,8 @@ export async function makeServer(cfg) {
       }
     }
 
-    // ---- phones ----
-    if (path === '/api/v2/invites' && method === 'POST') {
-      need(actor, 'session');
-      for (const [k, v] of invites) if (v.expires < now()) invites.delete(k);
-      if ([...invites.values()].filter((v) => !v.used).length >= LIMITS.maxInvites) throw new HttpError(429, 'busy', 'Too many invites waiting. Use one or wait 10 minutes.');
-      const invite = token(32);
-      invites.set(b64u(sha256(invite)), { expires: now() + LIMITS.inviteMs, used: false });
-      const here = origin(req);
-      const home = cfg.homeUrl || here;
-      const away = cfg.awayUrl || (here && here !== home ? here : null);
-      const p = new URLSearchParams();
-      if (home) p.set('h', home);
-      if (away) p.set('a', away);
-      p.set('i', invite);
-      note('invite-made', { by: actor.by });
-      return send(req, res, 200, {
-        invite,
-        expires: new Date(now() + LIMITS.inviteMs).toISOString(),
-        expiresIn: LIMITS.inviteMs / 1000,
-        home,
-        away,
-        code: 'restock-server:2?' + p.toString(),
-      });
-    }
-
-    if (path === '/api/v2/devices') {
-      if (method === 'GET') {
-        need(actor, 'session');
-        const devices = Object.entries(S.devices)
-          .map(([device, d]) => {
-            const seen = d.lastSeen ? new Date(d.lastSeen).toISOString() : null;
-            return { device, name: d.name, added: new Date(d.added).toISOString(), lastSeen: seen, seen };
-          })
-          .sort((a, b) => a.added.localeCompare(b.added));
-        return send(req, res, 200, { devices });
-      }
-      if (method === 'POST') {
-        checkLock(ip);
-        const b = json(body);
-        const inv = typeof b.invite === 'string' && b.invite.length <= 100 ? invites.get(b64u(sha256(b.invite))) : null;
-        if (!inv) {
-          failed(ip, 'invite');
-          throw new HttpError(401, 'invite', "That code isn't from this server. Make a new one on the web page.");
-        }
-        if (inv.used) throw new HttpError(410, 'used', 'That code was already used. Make a new one for each phone.');
-        if (inv.expires < now()) throw new HttpError(410, 'expired', 'That code has expired. Make a new one on the web page.');
-        const device = String(b.device ?? '');
-        // 0.9.4: nor srv- or keys- (the server's own file, and v3's keys/ names), as on v3.
-        if (!DEVICE.test(device) || reservedDevice(device)) throw new HttpError(400, 'device', "That device id won't work.");
-        if (!p256Key(b.pub)) throw new HttpError(400, 'pub', "The phone's key isn't a P-256 public key.");
-        const name = cleanName(b.name) || 'Phone';
-        const again = !!S.devices[device];
-        // A listed phone joins again only with its own key: a new invite can't take over another
-        // phone's id (and with it its archive and photos).
-        if (again && !sameKey(S.devices[device].pub, b.pub)) {
-          throw new HttpError(409, 'device-taken', 'That phone is already on this server. Remove it on the Phones page first, then add it again.');
-        }
-        if (!again && Object.keys(S.devices).length >= LIMITS.maxDevices) throw new HttpError(507, 'full', 'This server has as many phones as it takes.');
-        inv.used = true;
-        S.devices[device] = { name, pub: b.pub, added: again ? S.devices[device].added : now(), lastSeen: now() };
-        if (S.mode === 'new') S.mode = 'v2';
-        S.removedDevices = S.removedDevices.filter((d) => d !== device);
-        await st.save();
-        note(again ? 'phone-rejoined' : 'phone-added', { by: device, name });
-        return send(req, res, 200, { ok: true, device, name, server: { app: 'restock-server', version: VERSION, api: 2 } });
-      }
-    }
-
-    let m = /^\/api\/v2\/devices\/([^/]+)$/.exec(path);
-    if (m && method === 'DELETE') {
-      const device = /^[A-Za-z0-9_-]{1,64}$/.test(m[1]) ? m[1] : '';
-      need(actor, 'phone-or-session');
-      if (actor.type === 'phone' && actor.device !== device) throw new HttpError(403, 'forbidden', 'A phone can only remove itself.');
-      if (!S.devices[device]) throw new HttpError(404, 'not-found', "That phone isn't on this server.");
-      const name = S.devices[device].name;
-      delete S.devices[device];
-      S.removedDevices = [...S.removedDevices.filter((d) => d !== device), device].slice(-200);
-      signOutPhoneSessions(device);
-      for (const k of nonces.keys()) if (k.startsWith(device + ':')) nonces.delete(k);
-      await st.save();
-      note('phone-removed', { by: actor.by, device, name });
-      return send(req, res, 200, { removed: device });
-    }
-
-    // ---- linking the household to the web, and signing in with a phone ----
-    if (path === '/api/v2/link' && method === 'POST') {
-      need(actor, 'passphrase');
-      const mine = [...relays.values()].filter((r) => r.owner === actor.hash && r.expires > now());
-      if (mine.length >= 3) throw new HttpError(429, 'busy', 'Too many link codes waiting. Use one or wait a few minutes.');
-      return send(req, res, 200, makeRelay('link', { owner: actor.hash }));
-    }
-    if (path === '/api/v2/qrlogin' && method === 'POST') {
-      if (!S.account) throw new HttpError(409, 'setup', 'Set up the server first.');
-      if (qrMade.hit(limitKey(ip)) > LIMITS.qrLoginsPer10Min) throw new HttpError(429, 'rate', 'Too many sign-in codes. Try again in 10 minutes.', { retryAfter: 600 });
-      const poll = token(32);
-      const r = makeRelay('qrlogin', { poll: b64u(sha256(poll)) });
-      res.cookies.push(cookieHeader(QR_COOKIE, poll, Math.round(LIMITS.qrLoginMs / 1000), req, '/api/v2/qrlogin'));
-      return send(req, res, 200, r);
-    }
-
-    m = /^\/api\/v2\/(link|qrlogin)\/([^/]+)$/.exec(path);
-    if (m) {
-      const [, kind, id] = m;
-      if (method === 'POST') {
-        need(actor, 'phone');
-        const r = relay(id, kind);
-        if (r.answer) throw new HttpError(409, 'used', 'That code was already used.');
-        if (kind === 'qrlogin' && !S.account) throw new HttpError(409, 'setup', 'Set up the server first.');
-        r.answer = relayAnswer(json(body), actor);
-        note(kind === 'link' ? 'web-linked' : 'web-sign-in-approved', { by: actor.device });
-        return send(req, res, 200, { ok: true });
-      }
-      if (method === 'GET') {
-        if (kind === 'link') {
-          need(actor, 'passphrase');
-          const r = relay(id, kind);
-          if (r.owner !== actor.hash) throw new HttpError(404, 'not-found', "That code isn't on this server.");
-          if (!r.answer) return send(req, res, 200, { status: 'waiting', pending: true, expires: new Date(r.expires).toISOString() });
-          relays.delete(id);
-          return send(req, res, 200, { status: 'done', pending: false, ...r.answer });
-        }
-        // qrlogin: only the browser that asked (it holds the poll cookie) gets the session.
-        const r = relay(id, kind);
-        const poll = cookies(req)[QR_COOKIE];
-        if (!poll || !same(b64u(sha256(poll)), r.poll)) throw new HttpError(404, 'not-found', "That code isn't on this server.");
-        if (!r.answer) return send(req, res, 200, { status: 'waiting', pending: true, expires: new Date(r.expires).toISOString() });
-        relays.delete(id);
-        if (!S.devices[r.answer.device]) throw new HttpError(410, 'expired', 'That phone was removed. Try again.');
-        if (actor.type === 'web') delete S.sessions[actor.hash];
-        res.cookies.length = 0;
-        newSession(req, res, 'phone', { device: r.answer.device, ip: mask(ip) });
-        res.cookies.push(cookieHeader(QR_COOKIE, '', 0, req, '/api/v2/qrlogin'));
-        await st.save();
-        note('web-sign-in-with-phone', { by: r.answer.device, ip: mask(ip) });
-        return send(req, res, 200, { status: 'done', pending: false, ...r.answer, mustChange: false, webId: S.account.webId ?? null });
-      }
-    }
-
-    // ---- files ----
-    if (path === '/api/v2/files' && method === 'GET') {
-      need(actor, 'phone-or-session');
-      return send(req, res, 200, { files: (await walk()).filter((f) => parseName(f.name)) });
-    }
-    m = /^\/api\/v2\/files\/(.+)$/.exec(path);
-    if (m) {
-      need(actor, 'phone-or-session');
-      let name;
-      try {
-        name = decodeURIComponent(m[1]);
-      } catch {
-        name = '';
-      }
-      const parsed = parseName(name);
-      if (!parsed) throw new HttpError(400, 'name', "That isn't a Restock file name.");
-      if (method === 'GET' || method === 'HEAD') return serveFile(req, res, actor, name);
-      if (method === 'PUT' || method === 'DELETE') {
-        if (!canWrite(actor, parsed)) {
-          throw new HttpError(403, 'forbidden', actor.type === 'web' ? 'The web page can only write its own file.' : 'A phone can only write its own files.');
-        }
-        if (method === 'DELETE') return send(req, res, 200, await deleteFile(actor, name, parsed));
-        if (!bodyOk(parsed, body)) throw new HttpError(400, 'sealed', parsed.kind === 'keys' ? "That isn't a JSON keys file." : "That isn't a sealed Restock file.");
-        const out = await putFile(actor, name, parsed, body);
-        if (S.mode === 'new') {
-          S.mode = 'v2';
-          st.saveSoon();
-        }
-        // 0.9.4: a 0.9.3 browser's tab still open after the handover: its file is merged like any other.
-        if (S.mode === 'v3' && parsed.kind === 'sync') R?.merger.queue(name);
-        return send(req, res, 200, out);
-      }
-      throw new HttpError(405, 'method', 'Not allowed.');
-    }
-
-    if (path === '/api/v2/activity' && method === 'GET') {
-      need(actor, 'session');
-      const limit = Math.min(LIMITS.activityKept, Math.max(1, Number(url.searchParams.get('limit')) || 300));
-      const devices = Object.fromEntries(Object.entries(S.devices).map(([k, d]) => [k, d.name]));
-      return send(req, res, 200, {
-        activity: activity
-          .slice(-limit)
-          .reverse()
-          .map((a) => {
-            if (!a.by) return a;
-            if (String(a.by).startsWith('web')) return { ...a, who: 'Web page' };
-            return { ...a, device: a.by, who: devices[a.by] ?? 'A removed phone' };
-          }),
-        devices,
-        server: { version: VERSION, started, files: sizes.size, bytes: total, trashBytes, maxBytes: maxTotal, maxFileBytes: maxFile },
-      });
-    }
-
+    // 0.15.0: the 0.9.3 household routes (phones, files, links, sign-in with a phone, activity) are
+    // gone: a household lives on the server (v3) now. Only the account (passphrase) is left here.
     throw new HttpError(404, 'not-found', 'Not found.');
   }
 
@@ -1630,6 +1406,7 @@ export async function makeServer(cfg) {
       TMP,
       LIMITS,
       VERSION,
+      OLD_HOUSEHOLD,
       maxFile,
       send,
       readBody,
@@ -1667,7 +1444,6 @@ export async function makeServer(cfg) {
       v2Session,
       endV2Sessions: () => {
         S.sessions = dict();
-        relays.clear();
       },
       // A 0.9.3 browser signed in with this phone (v2's cookie session) goes with it.
       endV2PhoneSessions: signOutPhoneSessions,
@@ -1778,7 +1554,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     }
     if (!s.appBuilt()) console.log('  Note: the web app is not built into this copy (public/app/ is missing). Phones can still sync.');
     if (!s.v3) console.log('  Note: the Restock core is not in this copy (core/ is missing), so it can only keep a 0.9.3 household.');
-    else if (s.state.mode === 'v2') console.log('  This server keeps a 0.9.3 household. Hand it to the server from the owner phone (Restock 0.9.4).');
+    else if (s.state.mode === 'v2') console.log('  ' + OLD_HOUSEHOLD);
     else if (s.state.mode === 'new' && s.state.account) console.log('  Next: open the web page and Set up this server.');
     console.log('');
   });
