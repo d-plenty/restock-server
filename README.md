@@ -2,7 +2,7 @@
 
 Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock, shows your spending and price history in its **Data** tab, and gives you Restock in a web browser on any computer and [on iPhone](#restock-on-iphone).
 
-**Works with Restock 0.14.0 to 0.15.2** on your phones (Android, iPhone and iPad).
+**Works with Restock 0.14.0 to 0.16.0** on your phones (Android, iPhone and iPad).
 
 > **Update every phone to Restock 0.14.0 or newer first.** From server 0.15.0, a phone on an older version is turned away with "Update Restock on this phone to 0.14.0 or newer to keep syncing". It keeps everything it has and works on its own until it's updated. The server's **Server and phones** page lists any phone that needs updating. A server that still keeps a household from Restock 0.9.2 or 0.9.3 has [one step first](#already-using-the-server-with-restock-093).
 
@@ -377,7 +377,7 @@ Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-ser
 ### Updating from 0.9.4
 
 1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.15.2** (0.14.0 or newer is a must: older phones are turned away). Before server 0.15.0, phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
+2. **Update your phones to Restock 0.16.0** (0.14.0 or newer is a must: older phones are turned away). Before server 0.15.0, phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
 3. **Check Auto delete** in **Data → Manage data**. Your 0.9.4 **Keep data for** setting carries on as Auto delete (12 months unless you changed it).
 4. **Want to search the shops from the web page?** Run the [try-search script](#let-the-web-page-search-the-shops) to see which shops answer, then turn it on in Settings.
 
