@@ -99,6 +99,8 @@ export function config(env = process.env) {
     maxFileMb: Number(env.RESTOCK_MAX_FILE_MB || 32),
     maxTotalMb: Number(env.RESTOCK_MAX_TOTAL_MB || 2048),
     trustProxy: /^cloudflare$/i.test(tp) ? 'cloudflare' : yes(tp),
+    // 0.18.3: Server settings → Updates and moving: once a day, the newest version on GitHub (RESTOCK_UPDATE_CHECK=off turns it off for good).
+    updateCheck: !/^(0|false|no|off)$/i.test(String(env.RESTOCK_UPDATE_CHECK ?? '').trim()),
     quiet: yes(env.RESTOCK_QUIET),
     now: Date.now,
     // 0.9.5 (final review): the zone for the Data tab's months and days and the night's Auto delete (TZ).

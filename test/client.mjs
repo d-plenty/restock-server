@@ -266,8 +266,19 @@ export class V3Browser {
     this.session = out.session;
     this.key = core.sessionKeyOf(e.priv, u8(ch.kex), u8(ch.c), loginKey);
     this.kex = ch.kex;
+    // 0.18.3: a yes on an admin phone first; the keys come with it (waitForYes).
+    if (out.approve && !out.sealed) {
+      this.approve = out.approve;
+      return { status: 200, body: out, approve: out.approve };
+    }
     this.gift = core.openRsf1(this.key, u8(out.sealed));
     return { status: 200, body: out, gift: this.gift };
+  }
+  /** 0.18.3: after the phone's yes, the sign-in's keys (GET /api/v3/approve/<id>). */
+  async signInStatus(id = this.approve?.id) {
+    const r = await this.get('/api/v3/approve/' + id);
+    if (r.status === 200 && r.body.status === 'yes' && r.body.sealed) this.gift = core.openRsf1(this.key, u8(r.body.sealed));
+    return r;
   }
   /** A request: `json` (plain), `sealed` (RSF1 with the session key) or raw `body`. */
   async raw(method, path, { json, sealed, body, headers = {}, auth } = {}) {

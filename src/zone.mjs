@@ -6,6 +6,8 @@
 // The zone is TZ (compose.yaml, the Home Assistant app sets it), else what Node takes as local,
 // else UTC.
 
+/** 0.18.3: a zone name Node knows (Server settings → Household → Time zone). */
+export const validZone = (z) => valid(z);
 const valid = (z) => {
   if (typeof z !== 'string' || !z.trim() || z.length > 64) return false;
   try {

@@ -19,6 +19,10 @@ export const WEB_LIMITS = {
   maxQr: 100,
 };
 export const SEALED = 'application/x-restock-sealed';
+/** 0.18.3: Sign out after: 1 hour, 1 day, 7 days or 30 days (the default) of not being used. */
+export const SESSION_HOURS = [1, 24, 168, 720];
+/** 0.18.3: a sign-in waiting for an admin phone's yes is dropped after this long. */
+const WAITING_MS = 6 * MIN;
 const b64u = (b) => Buffer.from(b).toString('base64url');
 
 /** A short name for a browser, from its User-Agent ("Firefox on Linux"). */
@@ -35,7 +39,9 @@ export function makeWebAuth(R) {
   const qr = new Map(); // id -> { epub, expires, approved: { device } | null, done }
   const perIp = new Map(); // limitKey -> { n, from }
 
-  const life = (s) => (s.kind === 'phone' ? WEB_LIMITS.phoneSessionMs : WEB_LIMITS.sessionMs);
+  // 0.18.3: Server settings → Sign-in and security → Sign out after (1 hour to 30 days of not being used).
+  const passLife = () => (SESSION_HOURS.includes(S.settings?.sessionHours) ? S.settings.sessionHours * 60 * MIN : WEB_LIMITS.sessionMs);
+  const life = (s) => (s.kind === 'phone' ? Math.min(WEB_LIMITS.phoneSessionMs, passLife()) : passLife());
   const require256 = (s) => R.sha256(Buffer.from(String(s)));
 
   function prune() {
@@ -45,7 +51,7 @@ export function makeWebAuth(R) {
     for (const [k, v] of perIp) if (t - v.from > MIN) perIp.delete(k);
     let changed = false;
     for (const [k, s] of Object.entries(S.sessions3)) {
-      if (t - s.lastUsed > life(s)) {
+      if (t - s.lastUsed > life(s) || (s.waiting && t - s.created > WAITING_MS)) {
         delete S.sessions3[k];
         changed = true;
       }
@@ -141,8 +147,9 @@ export function makeWebAuth(R) {
       house: houseId(),
       ...extra,
     };
-    S.sessions3[b64u(require256(s))] = sess;
-    return { s, sess };
+    const hash = b64u(require256(s));
+    S.sessions3[hash] = sess;
+    return { s, hash, sess };
   }
 
   /** What a session is given: every serverKey, the house, its own webId. */
@@ -178,7 +185,15 @@ export function makeWebAuth(R) {
     }
     R.clearFails(ip);
     const key = core.sessionKeyOf(R.house.kexPriv(), core.unb64(epub), core.unb64(b.c), loginKey);
-    const { s, sess } = newSession('passphrase', key, { ip: R.mask(ip) }, req);
+    const { s, hash, sess } = newSession('passphrase', key, { ip: R.mask(ip) }, req);
+    // 0.18.3: then a yes on an admin phone (approve.mjs). Until then the session can only ask how
+    // that's going: the household's keys come with the yes (GET /api/v3/approve/<id>).
+    if (R.approvals?.needed() && S.mode === 'v3') {
+      const a = R.approvals.start('sign-in', hash, sess, R.mask(ip));
+      sess.waiting = a.id;
+      R.st.saveSoon();
+      return { session: s, expires: expiresOf(sess), approve: a };
+    }
     R.st.saveSoon();
     R.note('signed-in', { ip: R.mask(ip), kind: 'passphrase' });
     return { session: s, expires: expiresOf(sess), sealed: b64u(seal(sess.key, gift(sess))) };
@@ -273,6 +288,10 @@ export function makeWebAuth(R) {
     return r;
   }
   function qrApprove(id, device, b) {
+    // 0.18.3: the web page looks after the server, so only an admin phone signs a browser in (any
+    // phone could before, for the shopping list there). A household with no admin phones: any phone.
+    const admins = Object.values(S.devices).filter((d) => (d.status ?? 'active') === 'active' && d.role === 'admin');
+    if (admins.length && S.devices[device]?.role !== 'admin') throw new HttpError(403, 'admin', 'Only an admin phone can sign in to the server page. Ask an admin, or sign in with the passphrase.');
     const r = qrGet(id);
     if (r.approved) throw new HttpError(409, 'used', 'That code was already used.');
     // The phone may say which browser key it saw in the code: then it must be this one.
@@ -306,6 +325,7 @@ export function makeWebAuth(R) {
         ...(s.device ? { device: s.device } : {}),
         ...(s.ip ? { ip: s.ip } : {}),
         ...(k === currentHash ? { current: true } : {}),
+        ...(s.waiting ? { waiting: true } : {}),
       }))
       .sort((a, b) => b.lastUsed.localeCompare(a.lastUsed));
   }

@@ -8,18 +8,55 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { openKeys, makeHouse } from './house.mjs';
 import { makeMerger } from './merge.mjs';
-import { makeWebAuth, SEALED } from './webauth.mjs';
+import { makeWebAuth, SEALED, SESSION_HOURS } from './webauth.mjs';
+import { makeApprovals, compareVersions } from './approve.mjs';
+import { validZone } from '../zone.mjs';
+import { existsSync } from 'node:fs';
 import { makeHa } from './ha.mjs';
 import { makeData } from './data.mjs';
 import { makeSearch } from './search.mjs';
 import { backupStream } from './backup.mjs';
 import { parseNameV3, canWriteV3, canReadV3, bodyOkV3, reservedDevice, DEVICE } from '../names.mjs';
 import { checkPassphrase } from '../../public/setup/strength.js';
+import { placeOf, repairAddresses, cleanAddress } from './addr.mjs';
 
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 const b64u = (b) => Buffer.from(b).toString('base64url');
-const V3_LIMITS = { inviteMs: 10 * MIN, maxInvites: 20, maxJoinNonces: 5000 };
+const V3_LIMITS = { inviteMs: 10 * MIN, maxInvites: 20, maxJoinNonces: 5000, inviteKeptMs: DAY };
+
+/**
+ * 0.18.3: the Add a phone codes, kept in state.json (S.invites) so a restart doesn't lose them, and a
+ * used or expired one is remembered for a day, so scanning it says "already used" or "expired" (it
+ * said "That code isn't from this server" once the minute's tidy-up had taken it). Map-like.
+ */
+function inviteStore(S, save) {
+  if (!S.invites || typeof S.invites !== 'object' || Array.isArray(S.invites)) S.invites = {};
+  const all = () => S.invites;
+  return {
+    get: (k) => (Object.hasOwn(all(), k) ? all()[k] : undefined),
+    set(k, v) {
+      all()[k] = v;
+      save();
+      return this;
+    },
+    delete(k) {
+      const had = Object.hasOwn(all(), k);
+      delete all()[k];
+      if (had) save();
+      return had;
+    },
+    clear() {
+      S.invites = {};
+      save();
+    },
+    values: () => Object.values(all()).values(),
+    get size() {
+      return Object.keys(all()).length;
+    },
+    [Symbol.iterator]: () => Object.entries(all())[Symbol.iterator](),
+  };
+}
 
 /** Builds the v3 side on R (the helpers makeServer shares). Opens household.db when the mode is v3. */
 export async function makeV3(R) {
@@ -34,6 +71,9 @@ export async function makeV3(R) {
   R.house = makeHouse(R);
   R.merger = makeMerger(R);
   R.web = makeWebAuth(R);
+  R.approvals = makeApprovals(R);
+  // 0.18.3: Server settings → Household → Time zone, or TZ.
+  R.zone = () => (S.settings?.timeZone && validZone(S.settings.timeZone) ? S.settings.timeZone : R.cfg.timeZone);
   R.ha = makeHa(R);
   R.data = makeData(R);
   R.search = makeSearch(R);
@@ -48,13 +88,23 @@ export async function makeV3(R) {
   R.moveActivity = () => R.merger.moveActivity();
   const { house, merger, web, ha } = R;
 
-  const invites = new Map(); // sha256(invite) -> { expires, used, label }
+  const invites = inviteStore(S, () => R.st.saveSoon()); // sha256(invite) -> { expires, used, label, role }
   const joinNonces = new Map(); // n -> at
 
   // ---------- on start ----------
   const recovered = await house.recoverHandover();
   if (S.mode === 'v3' || S.mode === 'released') {
     if (!R.engine) await R.openDb({});
+    // 0.18.3: an http:// away address (or a home one that isn't at home) learnt from a tunnel before 0.18.3, put right.
+    if (S.house) {
+      const fixed = repairAddresses(S.house, R.isHomeAddress);
+      if (fixed.changed) {
+        R.note('addresses-repaired', { from: { home: S.house.home || null, away: S.house.away || null }, to: { home: fixed.home || null, away: fixed.away } });
+        S.house.home = fixed.home;
+        S.house.away = fixed.away;
+        await R.st.save();
+      }
+    }
     if (house.refreshServerRow()) R.note('server-row-updated', {});
     R.mergeEverything({});
     R.writeOwn();
@@ -65,14 +115,17 @@ export async function makeV3(R) {
   const timers = [
     setInterval(() => {
       const t = now();
-      for (const [k, v] of invites) if (v.expires < t) invites.delete(k);
+      for (const [k, v] of invites) if (v.expires + V3_LIMITS.inviteKeptMs < t) invites.delete(k);
       for (const [k, v] of joinNonces) if (t - v > 11 * MIN) joinNonces.delete(k);
       web.prune();
+      R.approvals.prune();
     }, MIN),
     setInterval(() => void merger.daily().catch((e) => R.log('daily:', e.message)), 60 * MIN),
+    setInterval(() => void checkUpdates(), 60 * MIN),
   ];
   for (const t of timers) t.unref();
   setTimeout(() => void merger.daily().catch((e) => R.log('daily:', e.message)), 30_000).unref();
+  setTimeout(() => void checkUpdates(), 60_000).unref();
 
   function close() {
     for (const t of timers) clearInterval(t);
@@ -172,7 +225,9 @@ export async function makeV3(R) {
     if (!c) throw new HttpError(403, 'confirm', 'Type your passphrase again to do that.');
     const a = S.account;
     const okC = web.useChallenge(c.c);
-    const want = a?.loginKey ? core.loginProof(Buffer.from(a.loginKey, 'base64url'), String(c.c ?? ''), actor.sid) : '';
+    // 0.18.3: an admin phone proves it over its own device id (it has no browser session).
+    const bound = actor.type === 'phone' ? 'phone:' + actor.device : actor.sid;
+    const want = a?.loginKey ? core.loginProof(Buffer.from(a.loginKey, 'base64url'), String(c.c ?? ''), bound) : '';
     if (!okC || !want || !R.same(String(c.proof ?? ''), want)) {
       R.failed(ip, 'confirm');
       R.note('confirm-refused', { by: actor.by, what, ip: R.mask(ip) });
@@ -181,6 +236,181 @@ export async function makeV3(R) {
     }
     R.clearFails(ip);
   }
+  /**
+   * 0.18.3: the risky changes (approve.mjs WHAT): the passphrase again (needConfirm), then on the web
+   * page a yes on an admin phone too. The first request, with the passphrase, gets 403 'approve' and
+   * the request to show ({ approve: { id, number, phones, expiresIn } }); once a phone said yes the
+   * page sends it again with `approved: id` in place of the passphrase (taken once, within 2 minutes).
+   * An admin phone asking for itself proves the passphrase (it is the phone). `what` is needConfirm's;
+   * APPROVE_OF maps it to the request's kind (no kind: the passphrase alone, as before).
+   */
+  const APPROVE_OF = { 'auto-delete': 'keep-data', 'keep-data': 'keep-data', 'delete-data': 'delete-data', prune: 'delete-data', 'delete-everything': 'delete-everything', 'recovery-key': 'recovery-key', passphrase: 'passphrase', 'user-name': 'user-name', move: 'move', erase: 'erase' };
+  function needSure(actor, b, ip, what) {
+    const kind = APPROVE_OF[what];
+    if (actor?.type === 'web3' && kind && b && typeof b.approved === 'string') {
+      if (R.approvals.take(b.approved, actor.hash, kind)) return;
+      throw new HttpError(403, 'approve-expired', 'That yes from the phone has run out. Try again.');
+    }
+    needConfirm(actor, b, ip, what);
+    if (actor?.type === 'web3' && kind && R.approvals.needed()) {
+      const a = R.approvals.start(kind, actor.hash, actor.session, R.mask(ip));
+      throw new HttpError(403, 'approve', 'Say yes on an admin phone.', { approve: a });
+    }
+  }
+  /**
+   * 0.18.3: Server settings and Data, from the web page or an admin phone (Settings → Sync → Server
+   * admin). `kind` 'passphrase' is needWeb's: on the web page, signed in with the passphrase (or an
+   * admin phone's sign-in for reading); a phone must be an admin and send sealed.
+   */
+  function needAdminWeb(actor, req, kind) {
+    if (actor?.type === 'phone') {
+      needPhone(actor);
+      needManager(actor, req);
+      return;
+    }
+    needWeb(actor, kind);
+  }
+  const activeAdmins = () => Object.entries(S.devices).filter(([, d]) => (d.status ?? 'active') === 'active' && d.role === 'admin');
+  /** 0.18.3: the last admin phone can't be removed or made a user, so there's always one to say yes and look after the phones. */
+  function needNotLastAdmin(device) {
+    const admins = activeAdmins();
+    if (admins.length === 1 && admins[0][0] === device) {
+      throw new HttpError(409, 'last-admin', "That's the only admin phone. Make another phone an admin first, so there's always one to look after the phones.");
+    }
+  }
+
+  // ---------- 0.18.3: the rest of Server settings ----------
+
+  const inDocker = () => R.cfg.inDocker ?? existsSync('/.dockerenv');
+  /** Oldest Restock that can join: never below the core's own minimum, never above this server. */
+  const lowestApp = () => core?.MIN_APP ?? '0.14.0';
+  function minApp() {
+    const v = S.settings?.minApp;
+    return typeof v === 'string' && compareVersions(v, lowestApp()) > 0 && compareVersions(v, R.VERSION) <= 0 ? v : lowestApp();
+  }
+  const tooOldHere = (version) => !!version && compareVersions(version, minApp()) < 0 && compareVersions(minApp(), lowestApp()) > 0;
+  const oldHereWords = () => `Update Restock to ${minApp()} or newer to keep syncing with your server (an admin chose that in Server settings).`;
+  const updatesOn = () => S.settings?.updateCheck !== false;
+  function updatesView() {
+    const u = S.updates ?? {};
+    const latest = typeof u.latest === 'string' ? u.latest : null;
+    return { on: updatesOn(), version: R.VERSION, latest, newer: !!latest && compareVersions(latest, R.VERSION) > 0, checked: u.checked ? iso(u.checked) : null, url: typeof u.url === 'string' ? u.url : null };
+  }
+  /** Once a day, when it's on: the newest release on GitHub (only its version number comes back). */
+  async function checkUpdates(force = false) {
+    if (!updatesOn() || R.cfg.updateCheck === false) return;
+    const u = S.updates ?? {};
+    if (!force && u.checked && now() - u.checked < 20 * 60 * MIN) return;
+    try {
+      const r = await fetch('https://api.github.com/repos/d-plenty/restock-server/releases/latest', { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'restock-server/' + R.VERSION }, signal: AbortSignal.timeout(15_000) });
+      if (!r.ok) throw new Error('GitHub answered ' + r.status);
+      const j = await r.json();
+      const v = String(j.tag_name ?? '').replace(/^v/i, '').trim();
+      if (!/^\d+\.\d+\.\d+$/.test(v)) throw new Error('no version');
+      S.updates = { latest: v, checked: now(), url: typeof j.html_url === 'string' && j.html_url.startsWith('https://github.com/') ? j.html_url : null };
+      R.st.saveSoon();
+    } catch (e) {
+      S.updates = { ...u, checked: now(), failed: String(e?.message ?? e).slice(0, 100) };
+      R.st.saveSoon();
+    }
+  }
+  function settingsView() {
+    return {
+      name: S.house.name,
+      keepMonths: house.keepMonths(),
+      autoDelete: house.keepMonths(),
+      webSearch: R.search.enabled(),
+      home: house.home() || null,
+      away: house.away() || null,
+      homeFixed: !!R.cfg.homeUrl,
+      awayFixed: !!R.cfg.awayUrl,
+      addrSet: !!S.house.addrSet,
+      timeZone: R.zone(),
+      timeZoneSet: !!S.settings?.timeZone,
+      minApp: minApp(),
+      lowestApp: lowestApp(),
+      version: R.VERSION,
+      sessionHours: SESSION_HOURS.includes(S.settings?.sessionHours) ? S.settings.sessionHours : 720,
+      user: S.account?.user ?? null,
+      updates: updatesView(),
+      inDocker: inDocker(),
+      approvers: R.approvals.phonesOf(),
+      recoverySaved: !!K.recoverySaved,
+      qrSignIn: S.settings?.qrSignIn !== false,
+    };
+  }
+  /** Checks the 0.18.3 settings in a PUT before anything changes; returns what to change. */
+  function checkMoreSettings(b) {
+    const out = {};
+    for (const where of ['home', 'away']) {
+      if (b[where] === undefined) continue;
+      if ((where === 'home' && R.cfg.homeUrl) || (where === 'away' && R.cfg.awayUrl)) {
+        throw new HttpError(409, 'fixed', `The ${where === 'home' ? 'home' : 'away'} address is set where the server runs (RESTOCK_${where.toUpperCase()}_URL). Change it there.`);
+      }
+      const c = cleanAddress(b[where], where, R.isHomeAddress);
+      if (c.error) throw new HttpError(400, where, c.error);
+      out[where] = c.value;
+    }
+    const home = out.home !== undefined ? out.home : house.home() || null;
+    const away = out.away !== undefined ? out.away : house.away() || null;
+    if ((out.home !== undefined || out.away !== undefined) && !home && !away) throw new HttpError(400, 'home', 'Keep at least one address, or phones have nowhere to find the server.');
+    if (b.timeZone !== undefined) {
+      if (b.timeZone !== null && !validZone(b.timeZone)) throw new HttpError(400, 'timeZone', "That isn't a time zone (like Australia/Brisbane).");
+      out.timeZone = b.timeZone;
+    }
+    if (b.minApp !== undefined) {
+      if (typeof b.minApp !== 'string' || !/^\d+\.\d+\.\d+$/.test(b.minApp) || compareVersions(b.minApp, lowestApp()) < 0 || compareVersions(b.minApp, R.VERSION) > 0) {
+        throw new HttpError(400, 'minApp', `Pick a version from ${lowestApp()} to ${R.VERSION}.`);
+      }
+      out.minApp = b.minApp;
+    }
+    if (b.sessionHours !== undefined) {
+      if (!SESSION_HOURS.includes(b.sessionHours)) throw new HttpError(400, 'sessionHours', 'Sign out after 1 hour, 1 day, 7 days or 30 days.');
+      out.sessionHours = b.sessionHours;
+    }
+    if (b.qrSignIn !== undefined) {
+      if (typeof b.qrSignIn !== 'boolean') throw new HttpError(400, 'qrSignIn', 'Turn Sign in by scanning with a phone on or off.');
+      out.qrSignIn = b.qrSignIn;
+    }
+    if (b.updateCheck !== undefined) {
+      if (typeof b.updateCheck !== 'boolean') throw new HttpError(400, 'updateCheck', 'Turn the update check on or off.');
+      out.updateCheck = b.updateCheck;
+    }
+    return out;
+  }
+  function applyMoreSettings(o, actor) {
+    if (o.home !== undefined || o.away !== undefined) {
+      if (o.home !== undefined) S.house.home = o.home ?? '';
+      if (o.away !== undefined) S.house.away = o.away;
+      // Set by hand: the server stops learning them from where it's opened.
+      S.house.addrSet = true;
+      house.refreshServerRow();
+      R.note('addresses-changed', { by: actor.by, home: house.home() || null, away: house.away() || null });
+    }
+    if (o.timeZone !== undefined) {
+      if (o.timeZone === null) delete S.settings.timeZone;
+      else S.settings.timeZone = o.timeZone;
+      R.note('time-zone-changed', { by: actor.by, zone: R.zone() });
+    }
+    if (o.minApp !== undefined) {
+      if (compareVersions(o.minApp, lowestApp()) === 0) delete S.settings.minApp;
+      else S.settings.minApp = o.minApp;
+      R.note('oldest-app-changed', { by: actor.by, version: minApp() });
+    }
+    if (o.sessionHours !== undefined) {
+      S.settings.sessionHours = o.sessionHours;
+      R.note('sign-out-after-changed', { by: actor.by, hours: o.sessionHours });
+    }
+    if (o.qrSignIn !== undefined) {
+      S.settings.qrSignIn = o.qrSignIn;
+      R.note(o.qrSignIn ? 'qr-sign-in-on' : 'qr-sign-in-off', { by: actor.by });
+    }
+    if (o.updateCheck !== undefined) {
+      S.settings.updateCheck = o.updateCheck;
+      if (o.updateCheck) void checkUpdates(true);
+    }
+  }
+
   /** 0.9.4 review: a receipt photo (photos/<sha256>.bin) must hold the photo its name says. */
   function photoOk(parsed, body) {
     const sha = parsed.name.slice('photos/'.length, -'.bin'.length);
@@ -200,6 +430,23 @@ export async function makeV3(R) {
     return b.length === 16 ? b : null;
   };
   const p256Str = (s) => (typeof s === 'string' && s.length <= 200 && R.p256Key(s) ? s : null);
+
+  /**
+   * Without RESTOCK_HOME_URL / RESTOCK_AWAY_URL, and until an admin sets the addresses (Server settings
+   * → Addresses), the address the page or the admin phone reached the server at: a home one is where
+   * phones find it at home, any other one is away, always as https:// (0.18.3: a Cloudflare tunnel
+   * passes plain http on, which made an http:// away address no phone uses).
+   */
+  function learnAddress(req, actor) {
+    if (S.house?.addrSet) return;
+    // A phone's request says nothing about how the page is reached from elsewhere.
+    if (actor?.type === 'phone') return;
+    const p = placeOf(R.origin(req), R.isHomeAddress);
+    if (!p || (p.loop && S.house.home)) return;
+    if (p.home && !R.cfg.homeUrl) S.house.home = p.home;
+    if (p.away && !R.cfg.awayUrl) S.house.away = p.away;
+    if (house.refreshServerRow()) R.writeOwn();
+  }
 
   /** A phone's signed request: Restock2, as v2's (its v2 key). */
   function phoneFields(req) {
@@ -229,6 +476,13 @@ export async function makeV3(R) {
     const told = String(req.headers['x-restock-app'] ?? '').trim().slice(0, 40);
     const version = told || summaryOf(ph.f.d)?.summary?.version || '';
     if (!ownFile && core?.appTooOld?.(version)) throw new HttpError(403, core.OLD_APP_ERROR, core.oldAppWords(), { min: core.MIN_APP, version });
+    // 0.18.3: Server settings → Household → Oldest Restock that can join.
+    if (!ownFile && tooOldHere(version)) throw new HttpError(403, core.OLD_APP_ERROR, oldHereWords(), { min: minApp(), version });
+    // 0.18.3: the version it said, so the server knows which admin phones can say yes to a sign-in.
+    if (told && ph.dev.app !== told && /^\d+\.\d+\.\d+/.test(told)) {
+      ph.dev.app = told;
+      R.st.saveSoon();
+    }
     if (now() - (ph.dev.lastSeen || 0) > MIN) {
       ph.dev.lastSeen = now();
       R.st.saveSoon();
@@ -267,6 +521,10 @@ export async function makeV3(R) {
     const ownFile = isFilePut && !!ph && decodeURIComponent(path.slice('/api/v3/files/'.length)).includes(ph.f.d);
     const actor = ph ? checkPhone(req, ph, body, ownFile) : wh ? web.check(req, wh, body) : null;
     if (actor?.type === 'web3') actor.sid = wh.f.s;
+    // 0.18.3: a sign-in waiting for an admin phone's yes can only ask how that's going, or sign out.
+    if (actor?.type === 'web3' && actor.session.waiting && !(path === '/api/v3/approve/' + actor.session.waiting || path === '/api/v3/logout')) {
+      throw new HttpError(403, 'approve', 'Say yes on an admin phone first.', { approve: R.approvals.view(actor.session.waiting) });
+    }
     const sealedIn = () => String(req.headers['content-type'] || '').startsWith(SEALED);
     const input = (opts) => (actor?.type === 'phone' && sealedIn() ? phoneSealed(body) : web.body(actor, req, body, opts));
     let m;
@@ -297,11 +555,11 @@ export async function makeV3(R) {
       return sealedAnswer(actor, 200, { ...web.gift(actor.session), user: S.account?.user ?? null, kind: actor.kind, expires: web.expiresOf(actor.session) }, req, res);
     }
     if (path === '/api/v3/browsers' && method === 'GET') {
-      needWeb(actor);
+      needAdminWeb(actor, req);
       return sealedAnswer(actor, 200, { browsers: web.list(actor.hash) }, req, res);
     }
     if ((m = /^\/api\/v3\/browsers\/([^/]+)$/.exec(path)) && method === 'DELETE') {
-      needWeb(actor);
+      needAdminWeb(actor, req, 'passphrase');
       const k = web.byId(m[1]);
       if (!k) throw new HttpError(404, 'not-found', "That browser isn't signed in.");
       web.endSession(k);
@@ -310,10 +568,65 @@ export async function makeV3(R) {
       return sealedAnswer(actor, 200, { ok: true, ended: m[1] }, req, res);
     }
 
+    // ---------- 0.18.3: a yes on an admin phone (approve.mjs) ----------
+    if ((m = /^\/api\/v3\/approve\/([A-Za-z0-9_-]{20,40})$/.exec(path))) {
+      needWeb(actor);
+      const id = m[1];
+      if (method === 'GET') {
+        if (actor.session.waiting === id) {
+          // The sign-in's own: with the yes, the session goes on and gets the household's keys.
+          const r = R.approvals.signInDone(id, actor.hash);
+          if (!r) return R.send(req, res, 200, R.approvals.view(id) ?? { status: 'waiting' });
+          delete actor.session.waiting;
+          await R.st.save();
+          R.note('signed-in', { ip: actor.session.ip, kind: 'passphrase', approvedBy: r.by });
+          return R.send(req, res, 200, { status: 'yes', sealed: b64u(web.seal(actor.session.key, web.gift(actor.session))) });
+        }
+        return R.send(req, res, 200, R.approvals.status(id, actor.hash));
+      }
+      if (method === 'POST') {
+        // { recovery }: the recovery key in place of a phone.
+        const b = input({ sealedOnly: true });
+        const v = R.approvals.byRecovery(id, actor.hash, b.recovery, ip);
+        return R.send(req, res, 200, v);
+      }
+      if (method === 'DELETE') {
+        R.approvals.cancel(id, actor.hash);
+        if (actor.session.waiting === id) web.endSession(actor.hash);
+        await R.st.save();
+        return R.send(req, res, 200, { ok: true });
+      }
+    }
+    if (path === '/api/v3/approvals' && method === 'GET') {
+      needMode('v3');
+      needPhone(actor);
+      if (actor.dev.role !== 'admin') return sealedAnswer(actor, 200, { approvals: [] }, req, res);
+      return sealedAnswer(actor, 200, { approvals: R.approvals.list() }, req, res);
+    }
+    if ((m = /^\/api\/v3\/approvals\/([A-Za-z0-9_-]{20,40})$/.exec(path)) && method === 'POST') {
+      needMode('v3');
+      needPhone(actor);
+      needManager(actor, req);
+      const b = input();
+      if (typeof b.yes !== 'boolean') throw new HttpError(400, 'yes', 'Yes or no?');
+      return sealedAnswer(actor, 200, R.approvals.answer(m[1], actor.device, b.yes), req, res);
+    }
+    // 0.18.3: an admin phone proving the passphrase (its risky changes): the salt and a challenge.
+    if (path === '/api/v3/confirm/challenge' && method === 'GET') {
+      needMode('v3');
+      needPhone(actor);
+      needManager(actor, req, false);
+      if (actor.dev.role !== 'admin') throw new HttpError(403, 'admin', 'Only an admin can do that.');
+      const user = S.account?.user ?? '';
+      return sealedAnswer(actor, 200, { ...web.challenge(user, ip), user }, req, res);
+    }
+
     // ---------- Sign in with a phone ----------
     if (path === '/api/v3/qrlogin' && method === 'POST') {
       needMode('v3');
       if (!S.account) throw new HttpError(409, 'setup', 'Set up the server first.');
+      // 0.18.3: Server settings → Sign-in and security → Sign in by scanning with a phone.
+      if (S.settings?.qrSignIn === false) throw new HttpError(403, 'qr-off', 'Signing in by scanning is off on this server. Use the passphrase.');
       if (R.qrMade.hit(R.limitKey(ip)) > R.LIMITS.qrLoginsPer10Min) throw new HttpError(429, 'rate', 'Too many sign-in codes. Try again in 10 minutes.', { retryAfter: 600 });
       return R.send(req, res, 200, web.qrStart(R.json(body)));
     }
@@ -359,6 +672,8 @@ export async function makeV3(R) {
     if (path === '/api/v3/join' && method === 'POST') {
       needMode('v3');
       R.checkLock(ip);
+      const told = String(req.headers['x-restock-app'] ?? '').trim().slice(0, 40);
+      if (tooOldHere(told)) throw new HttpError(403, core.OLD_APP_ERROR, oldHereWords(), { min: minApp(), version: told });
       return R.send(req, res, 200, await joinPhone(R.json(body), ip));
     }
     if (path === '/api/v3/upgrade' && method === 'POST') {
@@ -385,7 +700,15 @@ export async function makeV3(R) {
     // 0.18.0: a phone asks what it is on this server (an admin sees Phones and tablets in Settings → Sync).
     if (path === '/api/v3/me' && method === 'GET') {
       needPhone(actor);
-      return sealedAnswer(actor, 200, { device: actor.device, role: actor.dev.role === 'admin' ? 'admin' : 'user', label: actor.dev.label ?? actor.dev.name ?? null }, req, res);
+      const admin = actor.dev.role === 'admin';
+      // 0.18.3: an admin phone also hears of a newer server, and whether a yes is waiting (Server admin).
+      return sealedAnswer(
+        actor,
+        200,
+        { device: actor.device, role: admin ? 'admin' : 'user', label: actor.dev.label ?? actor.dev.name ?? null, server: R.VERSION, ...(admin ? { updates: updatesView(), waiting: R.approvals.list().length } : {}) },
+        req,
+        res,
+      );
     }
 
     // ---------- files ----------
@@ -465,33 +788,21 @@ export async function makeV3(R) {
       // 0.18.0: a code for an admin: the passphrase on the web page, or an admin phone.
       const role = b.admin === true ? 'admin' : 'user';
       if (role === 'admin') needAdmin(actor, req);
-      for (const [k, v] of invites) if (v.expires < now()) invites.delete(k);
-      if ([...invites.values()].filter((v) => !v.used).length >= V3_LIMITS.maxInvites) throw new HttpError(429, 'busy', 'Too many codes waiting. Use one or wait 10 minutes.');
-      // Without RESTOCK_HOME_URL / RESTOCK_AWAY_URL, the addresses this page is opened with (as v2's
-      // invites): a home one is where phones find the house at home, any other one is away.
-      const here = R.origin(req);
-      if (here) {
-        let host = '';
-        try {
-          host = new URL(here).hostname.replace(/^\[|\]$/g, '');
-        } catch {
-          host = '';
-        }
-        const loop = /^(localhost|127\.|::1$)/.test(host);
-        const atHome = !loop && (R.isHomeAddress(host) || /\.(local|lan|home\.arpa)$/i.test(host));
-        if (atHome && !R.cfg.homeUrl) S.house.home = here;
-        else if (!loop && !atHome && !R.cfg.awayUrl) S.house.away = here;
-        if (house.refreshServerRow()) R.writeOwn();
-      }
+      for (const [k, v] of invites) if (v.expires + V3_LIMITS.inviteKeptMs < now()) invites.delete(k);
+      if ([...invites.values()].filter((v) => !v.used && v.expires >= now()).length >= V3_LIMITS.maxInvites) throw new HttpError(429, 'busy', 'Too many codes waiting. Use one or wait 10 minutes.');
+      learnAddress(req, actor);
       const invite = b64u(randomBytes(32));
-      invites.set(b64u(R.sha256(Buffer.from(invite))), { expires: now() + V3_LIMITS.inviteMs, used: false, label, role });
+      // 0.18.3: a code that goes in a locked export file (Export data → Connections, from an admin
+      // phone) lasts a day: the file may be opened on the new phone later. Still once only.
+      const life = b.forExport === true ? 24 * 60 * MIN : V3_LIMITS.inviteMs;
+      invites.set(b64u(R.sha256(Buffer.from(invite))), { expires: now() + life, used: false, label, role, ...(b.forExport === true ? { forExport: true } : {}) });
       const p = new URLSearchParams();
       if (house.home()) p.set('h', house.home());
       if (house.away()) p.set('a', house.away());
       p.set('i', invite);
       p.set('k', house.kexPub());
       R.note('invite-made', { by: actor.by, label, ...(role === 'admin' ? { role } : {}) });
-      return sealedAnswer(actor, 200, { code: 'restock-server:3?' + p.toString(), expires: iso(now() + V3_LIMITS.inviteMs), expiresIn: V3_LIMITS.inviteMs / 1000, label, role, home: house.home(), away: house.away() }, req, res);
+      return sealedAnswer(actor, 200, { code: 'restock-server:3?' + p.toString(), expires: iso(now() + life), expiresIn: life / 1000, label, role, home: house.home(), away: house.away() }, req, res);
     }
     if ((m = /^\/api\/v3\/phones\/([^/]+)$/.exec(path)) && (method === 'PATCH' || method === 'DELETE')) {
       const fromPhone = actor?.type === 'phone';
@@ -510,6 +821,7 @@ export async function makeV3(R) {
         if (role === null) throw new HttpError(400, 'role', 'A phone is an admin or a user.');
         // 0.18.0: Make admin and Make user: the passphrase on the web page, or an admin phone.
         if (role !== undefined) needAdmin(actor, req);
+        if (role === 'user' && d.role === 'admin') needNotLastAdmin(device);
         if (label !== undefined) {
           d.label = label;
           house.signMember(device, label, house.memberRow(device)?.pub ?? d.myPub ?? null);
@@ -526,6 +838,7 @@ export async function makeV3(R) {
       }
       // An admin phone takes itself off with Leave (Settings → Sync), not here.
       if (fromPhone && device === actor.device) throw new HttpError(403, 'forbidden', 'To take this phone off, use Leave this server.');
+      if (d.role === 'admin') needNotLastAdmin(device);
       if (!fromPhone) needConfirm(actor, body.length ? input() : null, ip, 'remove-phone');
       // The answer to a phone is sealed with the key it asked with: the household's new one reaches it in keys/.
       const askedWith = K.keyv;
@@ -539,15 +852,17 @@ export async function makeV3(R) {
     }
 
     // ---------- settings ----------
-    const dataCtx = () => ({ req, res, ip, url, path, method, actor, body, input, needWeb, needConfirm, sealedAnswer });
+    // 0.18.3: Data from an admin phone too (Server admin in the app), and its risky changes need a yes on a phone (needSure).
+    const dataCtx = () => ({ req, res, ip, url, path, method, actor, body, input, needWeb: (a, k) => needAdminWeb(a, req, k), needConfirm: needSure, sealedAnswer });
     if (path === '/api/v3/settings') {
       if (method === 'GET') {
-        needWeb(actor);
-        return sealedAnswer(actor, 200, { name: S.house.name, keepMonths: house.keepMonths(), autoDelete: house.keepMonths(), webSearch: R.search.enabled() }, req, res);
+        needAdminWeb(actor, req);
+        return sealedAnswer(actor, 200, settingsView(), req, res);
       }
       if (method === 'PUT') {
-        needWeb(actor, 'passphrase');
+        needAdminWeb(actor, req, 'passphrase');
         const b = input();
+        const more = checkMoreSettings(b);
         let prune = false;
         // Checked before anything changes (review fix: a name in the same request was saved even
         // when the passphrase was then refused).
@@ -571,6 +886,7 @@ export async function makeV3(R) {
           S.settings.keepMonths = b.keepMonths;
           house.refreshServerRow();
         }
+        applyMoreSettings(more, actor);
         const searchWas = R.search.enabled();
         if (b.webSearch !== undefined) R.search.setEnabled(b.webSearch);
         await R.st.save();
@@ -581,8 +897,43 @@ export async function makeV3(R) {
           const cut = house.cutoff(now());
           if (cut) await merger.pruneTo(cut);
         }
-        return sealedAnswer(actor, 200, { name: S.house.name, keepMonths: house.keepMonths(), autoDelete: house.keepMonths(), webSearch: R.search.enabled() }, req, res);
+        return sealedAnswer(actor, 200, settingsView(), req, res);
       }
+    }
+    // 0.18.3: Server settings → Updates and moving: the server's log (no household data in it), and Restart.
+    if (path === '/api/v3/server/log' && method === 'GET') {
+      needAdminWeb(actor, req);
+      const rows = merger.readLog('log', 2000, null);
+      const text = rows.map((r) => `${r.at ?? ''} ${r.what ?? ''}${r.detail ? ' ' + JSON.stringify(r.detail) : ''}`).join('\n');
+      R.note('server-log-downloaded', { by: actor.by });
+      return sealedAnswer(actor, 200, { text: `Restock server ${R.VERSION} · ${S.mode} · ${new Date(now()).toISOString()}\n${text}\n`, lines: rows.length }, req, res);
+    }
+    if (path === '/api/v3/server/restart' && method === 'POST') {
+      needAdminWeb(actor, req, 'passphrase');
+      if (!inDocker()) throw new HttpError(409, 'restart', "This server doesn't run in Docker, so it wouldn't start again by itself. Restart it where it runs.");
+      R.note('restarting', { by: actor.by });
+      await R.st.save();
+      sealedAnswer(actor, 200, { ok: true, back: 'in a few seconds' }, req, res);
+      // Docker (restart: unless-stopped) starts it again.
+      setTimeout(() => R.restart?.() ?? process.exit(0), 500).unref();
+      return;
+    }
+    if (path === '/api/v3/server/updates' && method === 'GET') {
+      needAdminWeb(actor, req);
+      return sealedAnswer(actor, 200, updatesView(), req, res);
+    }
+    // 0.18.3: Server settings → Sign-in and security → User name (the passphrase stays the same).
+    if (path === '/api/v3/username' && method === 'POST') {
+      needAdminWeb(actor, req, 'passphrase');
+      const b = input();
+      const user = String(b.user ?? '').normalize('NFKC').trim();
+      if (!user || user.length > 60 || /[\u0000-\u001f\u007f]/.test(user)) throw new HttpError(400, 'user', 'Give a user name (up to 60 letters).');
+      needSure(actor, b, ip, 'user-name');
+      const was = S.account.user;
+      S.account.user = user;
+      await R.st.save();
+      R.note('user-name-changed', { by: actor.by, was });
+      return sealedAnswer(actor, 200, { user }, req, res);
     }
     // ---------- 0.9.5: Let the web page search the shops (search.mjs) ----------
     if (path === '/api/v3/search' && method === 'POST') {
@@ -598,7 +949,7 @@ export async function makeV3(R) {
       const b = input();
       const t = Date.parse(String(b.before ?? ''));
       if (!Number.isFinite(t) || t > now()) throw new HttpError(400, 'before', 'Pick a date in the past.');
-      needConfirm(actor, b, ip, 'prune');
+      needSure(actor, b, ip, 'prune');
       // 0.9.5 (review): what it meant on 0.9.4: prices, receipts (and their photos and archive months)
       // and logs. Never the statistics (srv_spend: POST /api/v3/data/delete, with its typed word).
       const out = await merger.pruneTo(new Date(t).toISOString(), 'deleted-older', ['prices', 'receipts', 'logs']);
@@ -612,17 +963,23 @@ export async function makeV3(R) {
       R.checkLock(ip);
       const b = input({ sealedOnly: true });
       const a = S.account;
-      const okC = web.useChallenge(b.c);
-      const want = core.loginProof(Buffer.from(a.loginKey, 'base64url'), String(b.c ?? ''), actor.sid);
-      if (!okC || !R.same(String(b.proof ?? ''), want)) {
-        R.failed(ip, 'passphrase');
-        R.note('passphrase-change-refused', { by: actor.by, ip: R.mask(ip) });
-        throw new HttpError(403, 'current', "That isn't the current passphrase.");
+      // 0.18.3: then a yes on an admin phone; sent again with `approved` (and the same new passphrase).
+      const approved = typeof b.approved === 'string' && R.approvals.take(b.approved, actor.hash, 'passphrase');
+      if (typeof b.approved === 'string' && !approved) throw new HttpError(403, 'approve-expired', 'That yes from the phone has run out. Try again.');
+      if (!approved) {
+        const okC = web.useChallenge(b.c);
+        const want = core.loginProof(Buffer.from(a.loginKey, 'base64url'), String(b.c ?? ''), actor.sid);
+        if (!okC || !R.same(String(b.proof ?? ''), want)) {
+          R.failed(ip, 'passphrase');
+          R.note('passphrase-change-refused', { by: actor.by, ip: R.mask(ip) });
+          throw new HttpError(403, 'current', "That isn't the current passphrase.");
+        }
       }
       const salt = typeof b.salt === 'string' ? Buffer.from(b.salt, 'base64url') : null;
       if (!salt || salt.length < 16 || salt.length > 32) throw new HttpError(400, 'bad-request', 'The salt must be 16-32 random bytes.');
       const auth = typeof b.auth === 'string' ? Buffer.from(b.auth, 'base64url') : null;
       if (!auth || auth.length !== 32) throw new HttpError(400, 'bad-request', 'The auth key must be 32 bytes.');
+      if (!approved && R.approvals.needed()) throw new HttpError(403, 'approve', 'Say yes on an admin phone.', { approve: R.approvals.start('passphrase', actor.hash, actor.session, R.mask(ip)) });
       await R.setPassphrase(b.salt, auth);
       // Everyone else is signed out; this browser carries on.
       for (const k of Object.keys(S.sessions3)) if (k !== actor.hash) delete S.sessions3[k];
@@ -632,13 +989,13 @@ export async function makeV3(R) {
       return sealedAnswer(actor, 200, { ok: true }, req, res);
     }
     if (path === '/api/v3/recovery') {
-      needWeb(actor, 'passphrase');
+      needAdminWeb(actor, req, 'passphrase');
       // GET says only whether it was saved; the key itself needs the passphrase again (POST { confirm }).
       if (method === 'GET') return sealedAnswer(actor, 200, { saved: !!K.recoverySaved }, req, res);
       if (method === 'POST') {
         const b = input();
-        if (b.confirm !== undefined) {
-          needConfirm(actor, b, ip, 'recovery-key');
+        if (b.confirm !== undefined || b.approved !== undefined) {
+          needSure(actor, b, ip, 'recovery-key');
           R.note('recovery-key-shown', { by: actor.by });
           return sealedAnswer(actor, 200, { recovery: core.formatRecovery(core.unbase32(K.recovery)), saved: !!K.recoverySaved }, req, res);
         }
@@ -661,7 +1018,7 @@ export async function makeV3(R) {
 
     // ---------- activity and logs ----------
     if ((path === '/api/v3/activity' || path === '/api/v3/logs') && method === 'GET') {
-      needWeb(actor);
+      needAdminWeb(actor, req);
       const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get('limit')) || 300));
       const before = url.searchParams.get('before');
       const kind = path.endsWith('activity') ? 'activity' : 'log';
@@ -676,22 +1033,22 @@ export async function makeV3(R) {
     // ---------- Home Assistant ----------
     if (path === '/api/v3/homeassistant') {
       if (method === 'GET') {
-        needWeb(actor);
+        needAdminWeb(actor, req);
         return sealedAnswer(actor, 200, ha.view(), req, res);
       }
       if (method === 'PUT') {
-        needWeb(actor, 'passphrase');
+        needAdminWeb(actor, req, 'passphrase');
         const out = ha.set(input(), sealedIn());
         R.note('home-assistant-changed', { by: actor.by, enabled: out.enabled });
         return sealedAnswer(actor, 200, out, req, res);
       }
     }
     if (path === '/api/v3/homeassistant/test' && method === 'POST') {
-      needWeb(actor, 'passphrase');
+      needAdminWeb(actor, req, 'passphrase');
       return sealedAnswer(actor, 200, await ha.test(input(), sealedIn()), req, res);
     }
     if (path === '/api/v3/homeassistant/sync' && method === 'POST') {
-      needWeb(actor);
+      needAdminWeb(actor, req);
       const r = await ha.round('now');
       return sealedAnswer(actor, 200, r.ok ? { ok: true, came: r.came, went: r.went, held: !!r.held } : { ok: false, message: r.message }, req, res);
     }
@@ -767,10 +1124,10 @@ export async function makeV3(R) {
     const inv = typeof b.invite === 'string' && b.invite.length <= 100 ? invites.get(b64u(R.sha256(Buffer.from(b.invite)))) : null;
     if (!inv) {
       R.failed(ip, 'invite');
-      throw new HttpError(401, 'invite', "That code isn't from this server. Make a new one on the web page.");
+      throw new HttpError(401, 'invite', "That code isn't from this server. Ask an admin to make a new one.");
     }
-    if (inv.used) throw new HttpError(410, 'used', 'That code was already used. Make a new one for each phone.');
-    if (inv.expires < now()) throw new HttpError(410, 'expired', 'That code has expired. Make a new one on the web page.');
+    if (inv.used) throw new HttpError(410, 'used', 'That code was already used: each one adds one phone. Ask an admin to make a new one (Settings → Sync → Server admin → Add a phone or tablet).');
+    if (inv.expires < now()) throw new HttpError(410, 'expired', inv.forExport ? 'The code in that file has run out (it lasts a day). Ask an admin for a new one (Settings → Sync → Server admin → Add a phone or tablet).' : 'That code has expired (they last 10 minutes). Ask an admin to make a new one (Settings → Sync → Server admin → Add a phone or tablet).');
     const myPub = p256Str(b.myPub);
     if (!myPub) throw new HttpError(400, 'myPub', "The phone's household key isn't a P-256 public key.");
     taken();

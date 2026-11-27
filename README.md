@@ -1,21 +1,21 @@
 # Restock server
 
-Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock, shows your spending and price history in its **Data** tab, and gives you Restock in a web browser on any computer and [on iPhone](#restock-on-iphone).
+Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock and keeps your household's history. Its web page (and **Server admin** on an admin phone) looks after the phones, the data and the server's settings.
 
-**Works with Restock 0.14.0 to 0.18.2** on your phones (Android, iPhone and iPad).
+**Works with Restock 0.14.0 to 0.18.3** on your phones (Android, iPhone and iPad).
 
-> **Update every phone to Restock 0.14.0 or newer first.** From server 0.15.0, a phone on an older version is turned away with "Update Restock on this phone to 0.14.0 or newer to keep syncing". It keeps everything it has and works on its own until it's updated. The server's **Server and phones** page lists any phone that needs updating. A server that still keeps a household from Restock 0.9.2 or 0.9.3 has [one step first](#already-using-the-server-with-restock-093).
+> **Update every phone to Restock 0.14.0 or newer first.** From server 0.15.0, a phone on an older version is turned away with "Update Restock on this phone to 0.14.0 or newer to keep syncing". It keeps everything it has and works on its own until it's updated. The server's **Phones and admins** page lists any phone that needs updating. A server that still keeps a household from Restock 0.9.2 or 0.9.3 has [one step first](#already-using-the-server-with-restock-093).
 
 > **Local first, always.** Every phone keeps its own full copy of what it shares. Your list, pantry and receipts work with no signal and with the server off; changes go up at the next sync. Only searching the shops needs the internet. **The server is optional:** a phone never needs it to work.
 
 - **The server is the house.** It's a member of your household that never sleeps, and its owner. It holds the household's keys, merges what the phones share (with the same code the phones and the web app use), and hands each phone its keys when you add it.
 - **Sealed on the wire.** Everything phones send or get is sealed and signed, even over plain `http://` at home. Browsers sign in without sending your passphrase or anything reusable.
 - **Readable at rest, so keep it private.** To merge, keep history and run Home Assistant, the server can read what phones share with it. See [what the server can read](#what-the-server-can-read) and keep its data folder private.
-- **It only contacts the shops if you let it.** With [Let the web page search the shops](#let-the-web-page-search-the-shops) turned on, and only when someone presses Search. It's off unless you turn it on.
+- **It talks to your phones, your Home Assistant and nothing else,** apart from asking GitHub once a day for the newest version number (Server settings → Updates and moving can turn that off). It never contacts the shops.
 
-<p align="center"><img src="docs/screenshots/web-home-light.png" alt="The Restock server's web page on a computer: Home, with a greeting and the date, the Shopping list and this week's specials"></p>
+<p align="center"><img src="docs/screenshots/web-phones-0183.png" alt="The Restock server's web page: Phones and admins, with every phone, its role, when it last synced, and Activity"></p>
 
-The pictures on this page use sample data: real products and prices, with a made-up year of price history and spending.
+The pictures on this page use sample data.
 
 ## Contents
 
@@ -23,10 +23,9 @@ The pictures on this page use sample data: real products and prices, with a made
 1. [Start it](#1-start-it) (Docker, Compose, Dockge, Portainer, TrueNAS, or [as a Home Assistant app](#as-a-home-assistant-app-no-docker-needed))
 2. [Log in and set up the server](#2-log-in-and-set-up-the-server)
 3. [Add your phones](#3-add-your-phones)
-- [The web page](#the-web-page): Home, the Shopping list, Your shops, Undo and Save settings
-- [Restock on iPhone](#restock-on-iphone)
-- [Data](#data): charts, downloads, [Manage data](#manage-data) and [Auto delete](#auto-delete)
-- [Let the web page search the shops](#let-the-web-page-search-the-shops)
+- [The web page](#the-web-page): Phones and admins, Data, and Server settings
+- [A yes on an admin phone](#a-yes-on-an-admin-phone)
+- [Data](#data): what's here, exports, [deleting](#deleting-data) and [how long it's kept](#how-long-data-is-kept)
 - [What each phone shares](#what-each-phone-shares)
 - [Home Assistant](#home-assistant)
 - [Sign in with a phone](#sign-in-with-a-phone)
@@ -122,142 +121,86 @@ Away from home, give phones an address that reaches port 8787 on Home Assistant:
 2. Log in with **admin** and your `RESTOCK_PASSWORD`. If it says *"Finish setting up Restock server from your home network first"*, you're coming in from outside your home network with the default `admin` password (or `change-me-now`): do this step at home (or over Tailscale), or restart the server with your own `RESTOCK_PASSWORD`.
 3. Choose a **passphrase**. Four or more random words works well, like *kettle orbit lemon fence*, or anything with at least 20 characters. The page won't take common passwords, the user name or "admin". From now on that's how you sign in, and the first-login password no longer works.
 4. **Set up this server:** give your house a name, like *The Smiths*. Everyone you add sees it. The server makes the household: its keys, its owner key and a [recovery key](#the-recovery-key).
-5. Sign in with your passphrase.
+5. Sign in with your passphrase. Once an admin phone is on Restock 0.18.3, signing in with the passphrase also needs [a yes on that phone](#a-yes-on-an-admin-phone).
 
 Your passphrase never leaves the browser. The browser turns it into a key; the server keeps a hash of it and a key that proves you know it, and each sign-in proves that with a fresh challenge, so watching a sign-in gives nothing to replay. Keep the passphrase somewhere safe, like a password manager.
 
-<p align="center"><img src="docs/screenshots/web-setup-light.png" alt="Set up this server: give your house a name. The sign-in page has an On iPhone? link." width="720"></p>
+<p align="center"><img src="docs/screenshots/web-signin-0183.png" alt="Sign in to your server: a QR code for an admin phone to scan, or the user name and passphrase" width="360"></p>
 
 ## 3. Add your phones
 
-1. On the web page, open **Server and phones** and choose **Add a phone**. Type who it's for, like *Sam's phone*. A QR code appears. It works once, for 10 minutes.
-2. On the phone, open Restock and go to **Settings → Sync → Your Restock server**, and scan the code. The phone says *"This phone was added as Sam's phone on The Smiths"*.
+1. On the web page, open **Phones and admins** and choose **Add a phone or tablet**. Type who it's for, like *Sam's phone*. A QR code appears. It works once, for 10 minutes (it still works if the server restarts, and a used or expired one says which).
+2. On a new phone, choose **Join a home server** on Restock's first screen; on one already set up, go to **Settings → Sync → Join your server**. Scan the code. The phone says *"This phone was added as Sam's phone on The Smiths"*.
 3. Choose [what this phone shares](#what-each-phone-shares), then do the same for each phone, with a new code each time.
 
 The code has the server's own key in it, so the phone knows it's talking to your server and nobody else can answer in its place. Each phone gets its own key for the server (the server keeps only its public half) and gets the household's keys sealed to it.
 
-**Server and phones** shows each phone, what it shares, its Restock version and when it was last seen. **Remove** takes a phone off straight away and gives the household a new key, so a lost or stolen phone can't read anything changed after that. Nothing it shared is deleted. A phone can also **Leave** by itself.
+**Phones and admins** shows each phone, what it shares, its Restock version and when it was last seen. **Remove** takes a phone off straight away and gives the household a new key, so a lost or stolen phone can't read anything changed after that. Nothing it shared is deleted. A phone can also **Leave** by itself.
 
 ### Admin phones (0.18.0)
 
-Each phone is a **user** or an **admin**. Phones start as users. On **Server and phones** (signed in with the passphrase), **Make admin** turns one into an admin, or tick **Make admin** when you add it. An admin does from Restock on the phone what this page does: in **Settings → Sync → Your Restock server → Phones and tablets** it adds phones and tablets (the same one-time code, for a user or an admin), renames them, makes them admins or users, and removes them. It can't remove itself (it uses Leave). The server checks every request, and an admin phone's requests and codes go sealed with the household's key. **Make user** takes it back. Each change is in Activity.
+Each phone is a **user** or an **admin**. Phones start as users. On **Phones and admins** (signed in with the passphrase), **Make admin** turns one into an admin, or tick **Make admin** when you add it. An admin does from Restock on the phone what this page does: in **Settings → Sync → Restock server → Phones and tablets** it adds phones and tablets (the same one-time code, for a user or an admin), renames them, makes them admins or users, and removes them. It can't remove itself (it uses Leave). The server checks every request, and an admin phone's requests and codes go sealed with the household's key. **Make user** takes it back. Each change is in Activity.
 
 Since 0.18.1, every change asks **Are you sure?** first (adding a phone, removing one, Make admin and Make user), on the phone and here. The server's only admin phone is warned before it makes itself a user or leaves. An admin phone gets a **notification** when a phone joins, leaves or is removed, or becomes an admin or a user (its Settings → Notifications, on to start with), and **Activity → Admin actions** here shows just what admins did.
 
-<p align="center"><img src="docs/screenshots/web-add-phone-light.png" alt="Server and phones: Add a phone, with its one-time QR code, and the list of phones" width="720"></p>
+**From 0.18.3,** an admin phone has **Server admin** (Settings → Sync → Restock server): the phones and tablets, **Sign in a computer** (scan the code on the sign-in page), Data and how long it's kept, Activity, and Server settings (the household, the addresses, signing in, the recovery key with the passphrase, Home Assistant on or off, and updates). It's also where an admin phone says yes to sign-ins and risky changes. **The last admin phone** can't be removed or made a user, from the phone or the web page: make another phone an admin first.
 
 ## The web page
 
-Sign in on any computer and you have Restock laid out for a big screen, from what your phones share:
+From 0.18.3 the web page looks after the server, and nothing else: the shopping list, the pantry and the shops are on the phones. It's small (about 1.7 MB), keeps nothing of the household in the browser, and the first time it opens in a browser it deletes the copy the page before kept there. The sidebar has:
 
-- **Home:** a greeting and the date, your Shopping list, and this week's specials on the things you buy.
-- **Shopping list:** Groceries, Bottle shop, Chemist and **General**, with the views **By shop · Aisle group · One list**. Click a line to open the item, with a big photo at the top; only the tick box ticks it off. Type in the add box to add from your pantry, or the words as they are.
-- **Pantry, Bottle shop and Chemist:** your items, their prices at each shop, and the history the server keeps.
-- **Your shops:** every shop you follow, with how many of your household's things are on special there, **Your specials** (just the things you buy that are on special at that shop, from what your phones found) and the shop's own catalogue and website links. Home shows the same count for each shop.
-- **Pick my milk:** a line added as words (by Home Assistant, say) has a Pick button. If nothing in your pantry matches, it can [search the shops](#let-the-web-page-search-the-shops) for it, when that's turned on.
-- **Undo:** after a change, a big white **Undo** shows at the bottom of the sidebar (with Sync now and Sign out) for a few seconds. One click (or Ctrl+Z, Cmd+Z on a Mac) puts it all back, even after "Add all to my list".
-- **Save settings:** settings wait for the green **Save settings** button, at the top right of the page and at the bottom. Leaving with changes not saved asks first.
+- **Phones and admins:** every phone and tablet, Add a phone or tablet, Make admin and Make user, Rename and Remove, and **Activity** (Everything, or just Admin actions).
 - **Data:** see [Data](#data).
+- **Server settings**, a page each:
+  - **Household:** its name, the time zone (for Activity and the nightly tidy-up), and the oldest Restock that can join.
+  - **Addresses:** at home and away from home ([at home and away](#at-home-and-away)), with Test both.
+  - **Sign-in and security:** the passphrase, the user name, the [recovery key](#the-recovery-key), sign in by scanning with a phone (on or off), sign out after (1 hour to 30 days), and every signed-in browser, with Sign out.
+  - **Home Assistant:** see [Home Assistant](#home-assistant).
+  - **This browser:** light or dark, the default theme or Simple, the text size, and the animations (the opening, the holidays, movement). Kept in that browser only.
+  - **Updates and moving:** the version and release notes, the update check, the server's log for a bug report, Restart (in Docker), [moving to a new server](#moving-to-a-new-server), and Erase this server.
 
-<p align="center"><img src="docs/screenshots/web-list-light.png" alt="The Shopping list on the web, by shop, with the item panel open and its photo at the top" width="720"></p>
+<p align="center"><img src="docs/screenshots/web-security-0183.png" alt="Server settings → Sign-in and security: the passphrase, user name and recovery key, scanning with a phone, a yes on an admin phone, sign out after, and the signed-in browsers" width="720"></p>
 
-<p align="center"><img src="docs/screenshots/web-settings-light.png" alt="Settings on the web, with Save settings at the top right and Let the web page search the shops" width="720"></p>
+Changes save as they're made; Addresses has its own Save. It works on a phone-sized screen too, and on an iPhone's home screen (Share → Add to Home Screen).
 
-## Restock on iPhone
+## A yes on an admin phone
 
-There's no iPhone app, but your server's web page goes on an iPhone's home screen. It opens like an app, and your Shopping list works with no signal.
+Like two-factor: **signing in with the passphrase**, and each **risky change** on the web page (how long data is kept, deleting data, showing the recovery key, changing the passphrase or user name, and erasing), needs a yes on an admin phone too.
 
-**It needs the server's https address.** iPhones only keep a web app for offline use, and only let it use the camera, on https. Set up one of these first (see [at home and away](#at-home-and-away)):
+1. The page shows a two-digit number and which admin phones were asked.
+2. **Open Restock on one of them.** It asks *Is this you?*, with the same number, which browser and from where. **Yes, it's me**, or **No, block it** (a sign-in that's said no to is signed out).
+3. The page carries on by itself.
 
-- **Cloudflare Tunnel**, with `RESTOCK_AWAY_URL=https://restock.example.com`.
-- **Tailscale's https:** `tailscale serve` gives the server an `https://<name>.<tailnet>.ts.net` address.
+<p align="center"><img src="docs/screenshots/web-yes-0183.png" alt="Say yes on an admin phone: a two-digit number, which phone was asked, the time left, Cancel, and Use the recovery key" width="360"></p>
 
-Then, on the iPhone:
-
-1. Open the server's https address in Safari.
-2. Tap Share, then **Add to Home Screen**.
-3. Tap **Add**. Open Restock from your home screen and sign in.
-4. Tick **Keep me signed in**, so it still opens when you're offline.
-
-The steps are also on the sign-in page and in the sidebar, under **On iPhone?**. On Android, open the https address in Chrome, then tap the menu and **Add to Home screen** (or **Install app**).
-
-**With no signal:**
-
-- Your Shopping list opens, and you can tick things off, add and remove them.
-- Scanning a barcode adds things you already have in your pantry.
-- Your changes go to the server when you're back online. The list shows when it was last updated.
-- Prices, specials and settings need the server.
-
-**Good to know:**
-
-- **Open it once with a connection** after you sign in, so it can keep a copy for offline.
-- **Sign out** takes the list off that iPhone. A sign-in made by scanning with a phone isn't kept for offline: sign in with your passphrase.
-- **No background price checks, alerts, widgets or Wi-Fi sync** on iPhone. Those need the Android app.
-
-<p align="center"><img src="docs/screenshots/web-iphone-list.png" alt="Restock on iPhone, opened from the home screen: the Shopping list, with when it was last updated" width="320"></p>
+A phone can't be woken for it (iPhones don't let apps check in the background, and Android only every 15 minutes), so the phone asks when Restock is opened, and every few seconds while it's open. **Every admin phone lost?** The page's **Use the recovery key** says yes in its place. Until an admin phone is on Restock 0.18.3, the passphrase alone signs in, as before, so updating the server first doesn't shut anyone out. Scanning the sign-in code with an admin phone needs no second step.
 
 ## Data
 
-The **Data** tab (between Server and phones and Settings) shows what's on the server, and what it means.
+The **Data** page shows what the household's phones have shared with this server:
 
-- **Spending each month,** **where you shop** and **saved on specials.** Spending is what you tick off your shopping list: the price at the shop you ticked it at, times how many, on the day. It isn't from receipts, and it isn't a budget.
-- **Price over time** for any item, at each of your shops, with what you paid.
-- **What you buy most,** with the usual price, what you last paid and where it's cheapest now. **Download as a spreadsheet** saves that table.
-- Ranges: **1 month · 2 months · 3 months · 6 months · 1 year**.
-- **What's on this server, by kind:** prices, receipts, statistics, logs and deleted files kept for 30 days, with how much room each takes and the disk space left.
-- **Download your data:** a **spreadsheet (.xlsx)**, **CSV files (.zip)**, or a **full export file (.json)** to move your data to another machine. The full export file is an open, documented format (`restock-export`, see [For developers](#for-developers)). None of them has loyalty or gift card numbers or PINs, receipt text or photos, keys, passwords or the Home Assistant token. They do have your list, pantry, prices and spending, so keep them private.
-- **Import data:** add products and prices from a file (the full export file, or the CSV files from the zip) on top of what's here. It never replaces or deletes anything and never touches your list or pantry. A preview shows what it will add and skip, then you confirm with your passphrase. Imported prices are marked **imported**. Up to 100 MB, 25,000 products and 500,000 prices a file. Files with card numbers, PINs, passwords, keys or receipts are refused. Only import prices you're allowed to use: shops' websites have terms of use. The format is in [docs/restock-import.md](docs/restock-import.md).
-- **Spending from before a phone joined (0.10.0):** a Restock 0.10.0 phone sends the spending it worked out on its own (Settings → Your data) once, so the Data tab has it too, unless **Share my spending with the server** is off on that phone (Settings → Sync and backups). Nothing doubles: a tick the server already counted is skipped.
-- **Refresh:** **Recount now** works out the spending again from what the server knows. **Ask phones to resend** asks each Restock 0.9.5 phone to send everything it has again at its next sync (once a day at most). Nothing doubles.
+- **Space used,** and each kind with **how many** (48,210 prices, for 412 products) and its **size**: price history, receipts and photos, spending records, the pantry and lists, activity and logs, and deleted files kept for 30 days. **Export** on a row saves that kind as a spreadsheet (.xlsx); **Export everything** saves the full export file (.json), an open, documented format (`restock-export`, see [For developers](#for-developers)). None of them has loyalty or gift card numbers or PINs, receipt text or photos, keys, passwords or the Home Assistant token, but they do have your list, pantry, prices and spending, so keep them private.
+- **Import a file:** add products and prices from a file (the full export file, or CSV files in a zip) on top of what's here. It never replaces or deletes anything and never touches your list or pantry. A preview shows what it will add and skip, then you confirm with your passphrase. Imported prices are marked **imported**. Up to 100 MB, 25,000 products and 500,000 prices a file. The format is in [docs/restock-import.md](docs/restock-import.md). Only import prices you're allowed to use.
+- **Download a backup:** see [Backups](#backups).
+- **Your spending and price charts** are on each phone, in Settings → Your data (the server works them out; the phone shows them).
 
-<p align="center"><img src="docs/screenshots/web-data-light.png" alt="The Data tab: spending each month from what you ticked off, where you shop, and price over time" width="720"></p>
+<p align="center"><img src="docs/screenshots/web-data-0183.png" alt="The Data page: space used, each kind with how many and its size, Export on each, how long data is kept, and Delete data" width="720"></p>
 
-### Manage data
+### Deleting data
 
-**Data → Manage data** deletes from the server. Every delete has **two checks**:
-
-1. The first says what will go and what stays, and suggests downloading a backup first.
-2. The second asks you to type **DELETE** (or **DELETE EVERYTHING**) and your passphrase.
-
-- **Delete a kind:** older prices, receipts and their photos, what you ticked off (the statistics), activity and logs, or the deleted files kept for 30 days.
-- **Clean up old data:** delete everything older than a date, from the kinds you tick.
-- **Delete everything on this server:** the server goes back to new and empty, for everyone. Every phone is unlinked and keeps all its own things; you can add them again. Your sign-in and the server's own settings stay.
+**Data → Delete some** deletes by kind, or only what's older than a date, from the kinds you tick. You see exactly what goes first, then type **DELETE** and your passphrase (and an admin phone says yes). **Delete everything** takes the server back to new and empty, for everyone: type **DELETE EVERYTHING**. Every phone is unlinked and keeps all its own things; you can add them again.
 
 Nothing here deletes your shopping list, your pantry, the newest price of each product, pinned receipts, or anything on the phones. Phones aren't told to delete anything.
 
-### Auto delete
+### How long data is kept
 
-**Auto delete** (in Manage data) deletes data older than you choose, every night at about 3 am (in the server's time zone, `TZ`): **Off**, **after 3, 6, 9 or 12 months**, or any number of months from 1 to 120. It covers prices, receipts and their photos, the phones' moved-off history (`archive/`), statistics and logs, with the same things kept as above.
+**How long data is kept** (on Data, and in Server admin on an admin phone) deletes data older than you choose, every night at about 3 am (in the server's time zone): **3, 6 or 12 months, 2 years, or until deleted**. It covers prices, receipts and their photos, the phones' moved-off history (`archive/`), statistics and logs, with the same things kept as above.
 
 - **Off is the start** on a new server: nothing is deleted until you delete it.
 - **A server updated from 0.9.4 keeps its setting** (12 months unless you changed it).
-- **Phones on 0.9.4 only understand 3, 6, 9 or 12 months.** Choose another number and those phones show Auto delete as off, but the server still deletes older data every night.
-- **Turning it on, or making it shorter,** deletes straight away, so it goes through the same two checks. The first says what will go and when ("data older than 9 months is deleted every night").
+- **Phones on 0.9.4 only understand 3, 6, 9 or 12 months:** with 2 years they show it as off, but the server still deletes older data every night.
+- **Turning it on, or making it shorter,** deletes straight away, so it needs **DELETE**, your passphrase and a yes on an admin phone.
 - **Each phone keeps its own price history,** as long as its own setting says.
-
-<p align="center"><img src="docs/screenshots/web-data-manage-light.png" alt="Manage data: what's on the server, Clean up old data, Auto delete with Save settings, and Delete everything" width="720"></p>
-
-## Let the web page search the shops
-
-**Off unless you turn it on.** Phones search the shops themselves. A web browser can't (the shops' sites don't let other sites read them), so to add things from the web page that aren't in your pantry yet, the server has to ask the shops for you.
-
-Turn it on in **Settings → Let the web page search the shops** (signed in with your passphrase), then **Save settings**. Then:
-
-- **Search** in the web's add box, or in the Pick sheet for a line that matches nothing ("chopsticks"), searches your shops on that tab, the same way a phone does. **Track** or **Add to list** saves a product with the price the shop gave the server.
-- **The server only contacts a shop when someone presses Search.** Nothing runs in the background, nothing is fetched on a timer, and no shop sign-ins are kept.
-- **Only the built-in shops** are asked, at their own addresses. Shops people added by hand are never searched from the server.
-- **The shops see your server's internet address** instead of a phone's. The server's log says that a search happened, on which tab and how each shop answered, but never what was searched for.
-- **Limits:** 10 searches a minute for each browser, 60 an hour for the server.
-
-**Some shops may block a server.** On a phone, Restock can fall back to a hidden browser when a shop's bot check says no; the server can't. Then the page says *"Coles blocked the search from your server. Search it on a phone instead."* Coles is the most likely to block it. Woolworths, Aldi, Dan Murphy's and BWS are the most likely to answer. Bottle shops and chemists answer only when their search page carries its products as data.
-
-**See which shops answer your server** before you rely on it. It asks each shop once, prints what came back and saves nothing:
-
-```sh
-docker compose exec restock-server node scripts/try-search.mjs
-```
-
-With `docker run`, use `docker exec restock-server node scripts/try-search.mjs`. To try one word at some shops: `docker compose exec restock-server node scripts/try-search.mjs "weet-bix" coles aldi`. With the Home Assistant app, run it from any computer at home that has Docker: `docker run --rm ghcr.io/d-plenty/restock-server:latest node scripts/try-search.mjs`.
 
 ## What each phone shares
 
@@ -265,11 +208,11 @@ Each phone chooses, in **Your server → What this phone shares**: **Groceries**
 
 Turning something off stops sending it; what it already shared stays on the server, unless you tick **Also take what this phone shared off the server**, which deletes that phone's own shared things for that tab (other people's stay). Prices and product details found at the shops stay for the household: they're about the shops, not about you.
 
-**What searches found (0.11.0).** A phone on Restock 0.11.0 also sends what its searches and scans turned up: the product, the shop, its price that day, its barcode and whether it was in stock, whether or not it was added to anything. It's history about the shops, kept with the prices (the Data tab counts it as "from searches"), deleted with them by Delete data and Auto delete, and never sent on anywhere. It's never used as a current price. Phones before 0.11.0 don't send it.
+**What searches found (0.11.0).** A phone on Restock 0.11.0 also sends what its searches and scans turned up: the product, the shop, its price that day, its barcode and whether it was in stock, whether or not it was added to anything. It's history about the shops, kept with the prices deleted with them by Delete some and How long data is kept, and never sent on anywhere. It's never used as a current price. Phones before 0.11.0 don't send it.
 
 ## Home Assistant
 
-In a household on the server, the shopping list syncs with Home Assistant **from the server**, all the time, for every phone and browser: one list, one token. On the web page, open **Home Assistant**, enter the address you open Home Assistant with (for example `http://homeassistant.local:8123`, or `http://homeassistant:8123` for the Home Assistant app), paste a **long-lived access token** (your Home Assistant profile → Security), **Test connection**, pick the to-do list and turn it on. It syncs every minute and a few seconds after a phone changes the list.
+In a household on the server, the shopping list syncs with Home Assistant **from the server**, all the time, for every phone and browser: one list, one token. On the web page, open **Server settings → Home Assistant**, enter the address you open Home Assistant with (for example `http://homeassistant.local:8123`, or `http://homeassistant:8123` for the Home Assistant app), paste a **long-lived access token** (your Home Assistant profile → Security), **Test**, set the to-do list and turn it on (an admin phone can turn it on or off too). It syncs every minute and a few seconds after a phone changes the list.
 
 A voice add that matches one of your items goes on that item's list (Pantry first, then Bottle shop, then Chemist). One that matches nothing goes on the **General** list.
 
@@ -277,17 +220,19 @@ The token is kept on the server only (in `keys.json`); it's never shown again, n
 
 ## Sign in with a phone
 
-On a computer you don't use often, you can skip the passphrase: on the sign-in page choose **Sign in with a phone** and scan the code with a phone on this server. The code lasts 2 minutes and works once. Such a sign-in ends after 12 hours unused, or straight away if you remove the phone that let it in. It can't change the server's settings or the passphrase, see the recovery key, download a backup, remove phones or delete data. Removing a phone, the recovery key, backups and every delete ask for your passphrase again, even when you're signed in with it.
+On a computer you don't use often, skip the passphrase: scan the code on the sign-in page with an **admin phone** (Restock → Settings → Sync → Server admin → **Sign in a computer**). The code lasts 2 minutes and works once, and needs no second step. Such a sign-in ends after 12 hours unused (or sooner, with Sign out after), or straight away if that phone is removed. It can see everything, but changing the server's settings or the passphrase, the recovery key, backups, removing phones and deleting data need the passphrase sign-in. Server settings → Sign-in and security can turn scanning off.
 
-Signed in somewhere you shouldn't be? **Browsers** lists every signed-in browser and can end one, and **Sign out everywhere** ends them all.
+Signed in somewhere you shouldn't be? **Sign-in and security** lists every signed-in browser, with **Sign out** on each.
 
 ## At home and away
 
-Phones try the **home** address first, then the **away** address. Away from home the address has to be **https://**, unless it's a Tailscale address (Tailscale already encrypts the connection). Plain `http://` only works on your home network. [Restock on iPhone](#restock-on-iphone) needs https everywhere, even at home.
+Phones try the **home** address first, then the **away** address. Away from home the address has to be **https://**, unless it's a Tailscale address (Tailscale already encrypts the connection). Plain `http://` only works on your home network. An iPhone or iPad needs https everywhere, even at home.
 
-The addresses go into the phones' QR code and into the household's signed record, so set them **before** you add phones. Phones already on the server pick up a change from the server's own file at their next sync (while they can still reach it at the old address):
+**Set them in Server settings → Addresses** (0.18.3), or on an admin phone. They go into the phones' QR code and into the household's signed record. Phones already on the server pick up a change from the server's own file at their next sync (while they can still reach it at the old address). A phone gives up on the home address after a moment and tries away; at the start of each sync it looks at home first, so back at home it goes home again. No location or Wi-Fi permission is needed.
 
-- `RESTOCK_HOME_URL`, for example `http://192.168.1.10:8787`. If you leave it out, it's the address you opened the web page with.
+Until you set them, the server learns them from the address its page is opened with: an address only a home network has (an IP address at home, a `.local` name, Tailscale) is the home one, and any other is away, always as `https://` (0.18.3: through a Cloudflare tunnel it came out as `http://`, which phones turn down with *"Restock only uses http:// for a server at home…"*; a server puts a saved one right by itself). Or set them where the server runs, which wins over the page:
+
+- `RESTOCK_HOME_URL`, for example `http://192.168.1.10:8787`.
 - `RESTOCK_AWAY_URL`, for example `https://restock.example.com`.
 
 Add them with `-e` in the `docker run` command (for example `-e RESTOCK_HOME_URL=http://192.168.1.10:8787`), or in `compose.yaml`.
@@ -311,13 +256,17 @@ Over plain `http://` the server also serves the web page's own code, so someone 
 
 ## Backups
 
-**Settings → Download a backup** on the web page makes one encrypted file of everything the server keeps (the household, its keys, every phone's files and photos, the history and the logs). You type a backup passphrase for it when you download; the file is useless without it, so keep the two apart. To restore, into a new, empty data folder:
+**Download a backup** on the web page makes one encrypted file of everything the server keeps (the household, its keys, every phone's files and photos, the history and the logs). It's on **Data → Download a backup**. You type a backup passphrase for it when you download; the file is useless without it, so keep the two apart. To restore, into a new, empty data folder:
 
 ```sh
 node scripts/restore.mjs restock-server-2026-11-10.rsb ./restored-data
 ```
 
 (In Docker: `docker run --rm -it -v "$PWD":/backup -v restock-data:/data ghcr.io/d-plenty/restock-server:latest node scripts/restore.mjs /backup/restock-server-2026-11-10.rsb /data` into an empty volume.) Then start the server with that folder. Phones carry on as before.
+
+### Moving to a new server
+
+**Server settings → Updates and moving → How to move** has the steps: if the new server has other addresses, set them in Addresses first and give the phones a day to sync; download a backup; restore it on the new machine as above; start the new server and stop this one.
 
 You can also copy the whole `restock-data` volume (stop the server first so the database is consistent):
 
@@ -329,11 +278,11 @@ docker start restock-server
 
 A copy like that is **not encrypted**: it can be read like the server itself. Keep it as private as the server's data folder. Your phones have their own copy of what they share anyway.
 
-The Data tab's downloads (.xlsx, CSV, the full export file) are for reading your data and moving it, not for restoring a server. Use the encrypted backup for that.
+The Data page's exports (.xlsx and the full export file) are for reading your data and moving it, not for restoring a server. Use the encrypted backup for that.
 
 ### The recovery key
 
-**Settings → Recovery key** shows the household's recovery key. Save it somewhere safe. If the server is ever lost, a phone can take the household back with it (Restock's **Take over**), and the household carries on without a server. A server that sees the household was taken back stops acting as its owner and its web page offers to start afresh.
+**Server settings → Sign-in and security → Recovery key** shows the household's recovery key (with the passphrase, and a yes on an admin phone). It's also what says yes when every admin phone is lost. Save it somewhere safe. If the server is ever lost, a phone can take the household back with it (Restock's **Take over**), and the household carries on without a server. A server that sees the household was taken back stops acting as its owner and its web page offers to start afresh.
 
 ## Forgot your passphrase?
 
@@ -348,7 +297,7 @@ Then open the web page, log in with **admin** and your `RESTOCK_PASSWORD` again,
 
 ## Recovering deleted files
 
-Phones move older prices and receipt photos to the server and then delete their own copy, so the server's `archive/` and `photos/` files may be the only ones. They're never simply deleted: when a phone deletes one (or another phone replaces it with something different), or Auto delete or Manage data removes one, the old copy goes to `trash/<when>/` in the data volume, with the same name it had under `files/`, for 30 days. The trash is emptied of anything older once a day and when the server starts (or straight away if you delete the deleted files kept for 30 days in Manage data). It counts towards `RESTOCK_MAX_TOTAL_MB`, and phones never see it. The **Activity** page lists each `trashed` file and where it went.
+Phones move older prices and receipt photos to the server and then delete their own copy, so the server's `archive/` and `photos/` files may be the only ones. They're never simply deleted: when a phone deletes one (or another phone replaces it with something different), or How long data is kept or Delete some removes one, the old copy goes to `trash/<when>/` in the data volume, with the same name it had under `files/`, for 30 days. The trash is emptied of anything older once a day and when the server starts (or straight away if you delete the deleted files kept for 30 days on Data). It counts towards `RESTOCK_MAX_TOTAL_MB`, and phones never see it. The **Activity** page lists each `trashed` file and where it went.
 
 To put one back, stop the server, move it back under `files/`, and start it again:
 
@@ -361,7 +310,7 @@ docker start restock-server
 
 (Use the folder and name `ls` showed; an archive goes back to `/data/files/archive/<phone>/`.) The phones see it again at their next sync.
 
-Who can delete what: a phone only its own `archive/<phone>/` files, and a photo only if it's the phone that put it on the server (another phone may use the same photo: when it asks, the photo stays). The web page only through Manage data and Auto delete, with their two checks.
+Who can delete what: a phone only its own `archive/<phone>/` files, and a photo only if it's the phone that put it on the server (another phone may use the same photo: when it asks, the photo stays). The web page only through Delete some, Delete everything and How long data is kept, with their checks.
 
 ## Updating
 
@@ -383,17 +332,15 @@ Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-ser
 ### Updating from 0.9.4
 
 1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.18.2** (0.14.0 or newer is a must: older phones are turned away). Before server 0.15.0, phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
-3. **Check Auto delete** in **Data → Manage data**. Your 0.9.4 **Keep data for** setting carries on as Auto delete (12 months unless you changed it).
-4. **Want to search the shops from the web page?** Run the [try-search script](#let-the-web-page-search-the-shops) to see which shops answer, then turn it on in Settings.
+2. **Update your phones to Restock 0.18.3** (0.14.0 or newer is a must: older phones are turned away). Before server 0.15.0, phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
+3. **Check How long data is kept** on **Data**. Your 0.9.4 setting carries on (12 months unless you changed it).
 
 Good to know:
 
 - **Phones still on 0.9.4 don't show the General list.** Its lines stay on the server and the 0.9.5 phones, and reach that phone when it updates.
 - **Ask phones to resend** only works with Restock 0.9.5 phones.
-- **Auto delete can now be any number of months from 1 to 120.** Phones still on 0.9.4 only understand 3, 6, 9 or 12: for any other number they show it as off, but the server still deletes older data every night.
 - **Pharmacy was renamed Health in 0.9.x, and from 0.10.10 it is Chemist** (and Keg is Bottle shop), on the web page and the phones. Nothing else about them changed.
-- **Spending in the Data tab** starts from what's ticked off on your list now and from here on. What was ticked off and cleared before the update isn't counted.
+- **Spending** starts from what's ticked off on your list now and from here on. What was ticked off and cleared before the update isn't counted.
 
 ## Already using the server with Restock 0.9.3?
 
@@ -401,7 +348,7 @@ Good to know:
 
 1. Run **restock-server 0.14.1** once (`ghcr.io/d-plenty/restock-server:0.14.1`), with the same data folder.
 2. Put **Restock 0.14.1** on the household's owner phone.
-3. On the web page, sign in, open **Server and phones → Take this household**. A QR code appears (10 minutes, once).
+3. On the web page, sign in, open **Server and phones → Take this household** (on restock-server 0.14.1's page). A QR code appears (10 minutes, once).
 4. On the owner phone, open **Your server → Hand this household to the server** and scan it.
 5. Then update the server to 0.15.0, and every phone to 0.14.0 or newer.
 
@@ -421,9 +368,9 @@ If your phones already share a household over Wi-Fi or a cloud drive folder: on 
 
 **It never has:** anything a phone doesn't share, your passphrase, or the phones' private keys.
 
-**It only talks to the shops** if you turn on [Let the web page search the shops](#let-the-web-page-search-the-shops), and then only when someone presses Search. The shops then see your server's internet address.
+**It never talks to the shops.** (Before 0.18.3, *Let the web page search the shops* could; that went with the web page's shopping screens.) Once a day it asks GitHub for the newest version number, unless that's turned off.
 
-**Phones can read the statistics (0.9.14).** A phone in the household can read what the Data tab shows (spending, top items, price series and storage) for its Settings → Your data, signed as that phone. It can't export, delete or change anything there. **From 0.10.0** a phone can also add the spending it worked out before it joined (`POST /api/v3/data/spend`, up to 5,000 lines a time, signed as that phone), unless Share my spending with the server is off on it. It can only add, never change or delete. **From 0.10.1** both are sealed with the household's server key (the phone asks with `X-Restock-Seal: rsf1`), so they're as private on the network as sync; 0.9.14 and 0.10.0 phones still get them as before until they update.
+**Phones can read the statistics (0.9.14).** A phone in the household can read the statistics (spending, top items, price series and storage) for its Settings → Your data, signed as that phone. It can't export, delete or change anything there. **From 0.10.0** a phone can also add the spending it worked out before it joined (`POST /api/v3/data/spend`, up to 5,000 lines a time, signed as that phone), unless Share my spending with the server is off on it. It can only add, never change or delete. **From 0.10.1** both are sealed with the household's server key (the phone asks with `X-Restock-Seal: rsf1`), so they're as private on the network as sync; 0.9.14 and 0.10.0 phones still get them as before until they update.
 
 **Feedback from the web page (0.9.13)** goes from your browser straight to Restock's own feedback inbox (`restock-prices.plenty.family`), only when someone presses Send in Settings → Send feedback, never through or from the server. The web app's Content-Security-Policy allows that one address and nothing else outside the server.
 
@@ -431,7 +378,7 @@ If your phones already share a household over Wi-Fi or a cloud drive folder: on 
 
 - keep the data folder private (don't share the volume or dataset, and keep its backups as private as the server);
 - put it on an encrypted disk if you can (an encrypted TrueNAS dataset, LUKS, FileVault, BitLocker);
-- use the [encrypted backup](#backups) for copies that leave the machine, and keep the Data tab's downloads private too;
+- use the [encrypted backup](#backups) for copies that leave the machine, and keep the Data page's exports private too;
 - run the server yourself, from this image, on a machine you trust: it also serves the web app to your browser.
 
 On the network everything stays sealed: phone traffic always, browser traffic too (with the plain-http caveat above). The makers of Restock never see any of it.
@@ -451,9 +398,10 @@ On the network everything stays sealed: phone traffic always, browser traffic to
 | `RESTOCK_MAX_TOTAL_MB` | `2048` | The most the server keeps in all |
 | `PORT` | `8787` | The port inside the container |
 | `RESTOCK_QUIET` | off | `true` to hide error details in the logs |
-| `TZ` | `UTC` in Docker | Your time zone, for example `Australia/Brisbane` or `Australia/Sydney`. The Data tab's months and days, and Auto delete at 3 am, use it. Set yours (the Home Assistant app uses Home Assistant's) |
+| `RESTOCK_UPDATE_CHECK` | on | `off`: never ask GitHub for the newest version (Server settings → Updates and moving can turn it off too) |
+| `TZ` | `UTC` in Docker | Your time zone, for example `Australia/Brisbane` or `Australia/Sydney`. Activity's times, and the nightly tidy-up at 3 am, use it, unless the time zone is set on Server settings → Household. Set yours (the Home Assistant app uses Home Assistant's) |
 
-Auto delete, Let the web page search the shops and Home Assistant are set on the web page, not here.
+How long data is kept, the addresses, the time zone (over `TZ`), sign-in and Home Assistant are set on the web page (Server settings), not here.
 
 ## What's in the data volume
 
@@ -462,7 +410,7 @@ Auto delete, Let the web page search the shops and Home Assistant are set on the
 ├── state.json          the mode, the server's id, the house's name, the web user (salt, scrypt hash
 │                       and sign-in key), each phone (name, label, public keys, status), browser
 │                       sign-ins (with their session keys), who last wrote each file, and the
-│                       server's own settings (Auto delete, Let the web page search the shops)
+│                       server's own settings (how long data is kept, the addresses, sign-in, the time zone)
 ├── keys.json           (0600) the server's own key, the household's keys and owner key, the phones'
 │                       recovery secrets, the recovery key, Home Assistant's address and token
 ├── household.db        (0600) the household itself (SQLite, Restock's own layout): what phones share,

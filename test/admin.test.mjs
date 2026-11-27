@@ -26,7 +26,8 @@ describe('0.18.0: users and admins', () => {
   test('a phone is a user to start with; the web page (passphrase) makes it an admin, and a user again', async () => {
     const t = await house();
     const a = await addPhone(t, 'A');
-    assert.deepEqual((await sealed(t, a, 'GET', '/api/v3/me')).body, { device: a.device, role: 'user', label: 'A' });
+    // 0.18.3: and the server's version.
+    assert.deepEqual((await sealed(t, a, 'GET', '/api/v3/me')).body, { device: a.device, role: 'user', label: 'A', server: t.state.version ?? (await t.web.get('/api/v3/health')).body.version });
     let list = (await t.web.get('/api/v3/phones')).body.phones;
     assert.equal(list.find((p) => p.device === a.device).role, 'user');
     // A user phone can't see or change the phones.
@@ -40,6 +41,12 @@ describe('0.18.0: users and admins', () => {
     list = (await sealed(t, a, 'GET', '/api/v3/phones')).body.phones;
     assert.equal(list.find((p) => p.device === a.device).me, true);
     assert.equal(list.find((p) => p.device === a.device).role, 'admin');
+    // 0.18.3: not while it's the only admin phone.
+    const only = await t.web.req('PATCH', '/api/v3/phones/' + a.device, { json: { role: 'user' } });
+    assert.equal(only.status, 409);
+    assert.equal(only.body.error, 'last-admin');
+    const two = await addPhone(t, 'Two');
+    await t.web.req('PATCH', '/api/v3/phones/' + two.device, { json: { role: 'admin' } });
     // And a user again.
     assert.equal((await t.web.req('PATCH', '/api/v3/phones/' + a.device, { json: { role: 'user' } })).body.role, 'user');
     assert.equal((await sealed(t, a, 'GET', '/api/v3/phones')).status, 403);
@@ -110,6 +117,10 @@ describe('0.18.0: users and admins', () => {
     const t = await house();
     const a = await addPhone(t, 'A');
     await t.web.req('PATCH', '/api/v3/phones/' + a.device, { json: { role: 'admin' } });
+    // 0.18.3: the last admin phone can't be removed; with another admin it can.
+    assert.equal((await t.web.removePhone(a.device)).status, 409);
+    const keeper = await addPhone(t, 'Keeper');
+    await t.web.req('PATCH', '/api/v3/phones/' + keeper.device, { json: { role: 'admin' } });
     assert.equal((await t.web.removePhone(a.device)).status, 200);
     const code = (await t.web.post('/api/v3/phones', { label: 'A again' })).body.code;
     const back = t.phone3({ device: a.device });

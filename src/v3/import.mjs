@@ -88,8 +88,11 @@ export function cleanBarcode(v) {
 const flag = (v) => (v === true || v === 1 ? 1 : v === false || v === 0 || v === undefined || v === null ? 0 : null);
 const cents = (n) => Math.round(n * 100) / 100;
 
-export function makeImport(R, { zone, now = R.now } = {}) {
+export function makeImport(R, { zone: zoneIn, now = R.now } = {}) {
   const { S, HttpError } = R;
+  // 0.18.3: the zone can change (Server settings → Household → Time zone): asked each time.
+  const zoneOf = typeof zoneIn === 'function' ? zoneIn : () => zoneIn;
+  let offsetsZone;
   const db = () => R.merger.raw();
   const iso = (t = now()) => new Date(t).toISOString();
   // The day a time is in, in the server's zone: Intl once per quarter hour (every zone changes its
@@ -98,6 +101,11 @@ export function makeImport(R, { zone, now = R.now } = {}) {
   const Q = 15 * MIN;
   function day(isoText) {
     const t = Date.parse(isoText);
+    const zone = zoneOf();
+    if (zone !== offsetsZone) {
+      offsets.clear();
+      offsetsZone = zone;
+    }
     const q = Math.floor(t / Q);
     let off = offsets.get(q);
     if (off === undefined) {
@@ -113,6 +121,7 @@ export function makeImport(R, { zone, now = R.now } = {}) {
   /** When a price was seen, as the ISO time stored: a day alone is noon that day in the server's zone. */
   function dateOf(v) {
     if (typeof v !== 'string' || v.length > 40) return null;
+    const zone = zoneOf();
     let t;
     let m;
     if ((m = DATE_ONLY.exec(v))) {

@@ -70,12 +70,12 @@ const ids = (v) => (Array.isArray(jsonOr(v, null)) ? jsonOr(v, []).filter((x) =>
 export function makeData(R) {
   const { S, now, HttpError } = R;
   /** 0.9.5 (final review): one time zone for every day and month here (zone.mjs). */
-  const ZONE = R.cfg?.timeZone || serverZone();
-  const localMonth = (ms) => monthIn(ms, ZONE);
+  const zoneNow = () => R.zone?.() || R.cfg?.timeZone || serverZone();
+  const localMonth = (ms) => monthIn(ms, zoneNow());
   const db = () => R.merger.raw();
   const iso = (t = now()) => new Date(t).toISOString();
   /** 0.9.6: Import (import.mjs). */
-  const importer = makeImport(R, { zone: ZONE, now });
+  const importer = makeImport(R, { zone: zoneNow, now });
 
   // ---------- prices and the usual price ----------
 
@@ -93,13 +93,13 @@ export function makeData(R) {
    */
   function usualOf(pid, at, memo) {
     if (!pid) return null;
-    const key = pid + '|' + localDay(iso(at), ZONE);
+    const key = pid + '|' + localDay(iso(at), zoneNow());
     if (memo?.has(key)) return memo.get(key);
     const rows = db()
       .prepare('SELECT date, price, was_price, is_special FROM prices WHERE product_id = ? AND date >= ? AND date <= ? ORDER BY date')
       .all(pid, iso(at - HISTORY_DAYS * DAY), iso(at));
     const byDay = new Map();
-    for (const r of rows) byDay.set(localDay(r.date, ZONE), r);
+    for (const r of rows) byDay.set(localDay(r.date, zoneNow()), r);
     const readings = [...byDay.values()];
     let u = median(readings.filter((r) => !Number(r.is_special)).map((r) => Number(r.price)));
     if (u === undefined) u = median(readings.map((r) => num(r.was_price)).filter((v) => v !== null && v > 0));
@@ -440,14 +440,14 @@ export function makeData(R) {
     const n = Number(s);
     if (!Number.isInteger(n) || n < 1 || n > 120) throw new HttpError(400, 'period', 'Pick 1 to 120 months, or all.');
     const [y, m] = localMonth(now()).split('-').map(Number);
-    const from = wallTime(ZONE, y, m - (n - 1), 1);
+    const from = wallTime(zoneNow(), y, m - (n - 1), 1);
     return { period: n, fromMs: from, from: iso(from) };
   }
 
   function monthsBetween(fromMs, toMs) {
     const out = [];
     let [y, m] = localMonth(fromMs).split('-').map(Number);
-    for (let i = 0; wallTime(ZONE, y, m, 1) <= toMs && i < 1300; i++) {
+    for (let i = 0; wallTime(zoneNow(), y, m, 1) <= toMs && i < 1300; i++) {
       out.push(`${y}-${pad(m)}`);
       if (++m > 12) {
         m = 1;
@@ -583,11 +583,11 @@ export function makeData(R) {
     const fromIso = p.fromMs ? iso(p.fromMs) : '';
     for (const c of use) {
       for (const r of raw.prepare("SELECT date, price, is_special, source FROM prices WHERE product_id = ? AND date >= ? AND source <> 'demo' ORDER BY date").all(c.id, fromIso)) {
-        const k = weekOf(r.date, ZONE) + '|' + c.chain;
+        const k = weekOf(r.date, zoneNow()) + '|' + c.chain;
         const had = cells.get(k);
         // 0.9.6: `imported` when that week's price came from an import (the Data tab tags it).
         if (!had || Number(r.price) < had.price)
-          cells.set(k, { week: weekOf(r.date, ZONE), chain: c.chain, price: round2(Number(r.price)), special: !!Number(r.is_special), ...(r.source === 'imported' ? { imported: true } : {}) });
+          cells.set(k, { week: weekOf(r.date, zoneNow()), chain: c.chain, price: round2(Number(r.price)), special: !!Number(r.is_special), ...(r.source === 'imported' ? { imported: true } : {}) });
       }
     }
     const weeks = [...cells.values()].sort((a, b) => a.week.localeCompare(b.week) || a.chain.localeCompare(b.chain)).slice(-LIMITS.seriesWeeks * 8);
@@ -804,7 +804,8 @@ export function makeData(R) {
   /** The second step of a delete: the typed word and the passphrase again (in that order, the proof is used last). */
   function needDelete(c, b, word, what) {
     c.needWeb(c.actor, 'passphrase');
-    if (!b || typeof b !== 'object' || !b.confirm || typeof b.confirm !== 'object') throw new HttpError(403, 'confirm', 'Type your passphrase again to do that.');
+    // 0.18.3: or `approved`: the passphrase was checked when the yes on an admin phone was asked for (api.mjs needSure).
+    if (!b || typeof b !== 'object' || ((!b.confirm || typeof b.confirm !== 'object') && typeof b.approved !== 'string')) throw new HttpError(403, 'confirm', 'Type your passphrase again to do that.');
     if (b.typed !== word) throw new HttpError(400, 'typed', `Type ${word} to confirm.`);
     c.needConfirm(c.actor, b, c.ip, what);
   }

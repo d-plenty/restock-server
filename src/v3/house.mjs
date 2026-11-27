@@ -8,6 +8,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateKeyPairSync, randomBytes, createPublicKey } from 'node:crypto';
 import { atomicWriteSync } from '../state.mjs';
+import { placeOf } from './addr.mjs';
 
 const b64u = (b) => Buffer.from(b).toString('base64url');
 const DAY = 24 * 3600 * 1000;
@@ -178,7 +179,10 @@ export function makeHouse(R) {
   async function create(name, origin, by) {
     newHouseholdKeys();
     keys.save();
-    S.house = { name, home: R.cfg.homeUrl || origin || '', away: R.cfg.awayUrl || null, created: new Date(now()).toISOString(), seeded: false };
+    // 0.18.3: the address the page was set up with goes where it belongs (an away one as https://),
+    // not always in home (behind a Cloudflare tunnel that made an http:// home address no phone uses).
+    const p = placeOf(origin, R.isHomeAddress) ?? {};
+    S.house = { name, home: R.cfg.homeUrl || p.home || '', away: R.cfg.awayUrl || p.away || null, created: new Date(now()).toISOString(), seeded: false };
     // 0.9.5 (review): the browsers signed in with no household yet (and the one setting it up) are of this one.
     R.web?.joinHouse(by);
     await R.openDb({ fresh: true });

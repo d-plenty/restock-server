@@ -17,7 +17,7 @@ const restockDir = resolve(process.env.RESTOCK_DIR ? resolve(here, '..', process
 const has = existsSync(join(built, 'sw.js'));
 const shellOf = () => JSON.parse(JSON.parse(readFileSync(join(built, 'sw.js'), 'utf8').match(/("\{\\"build\\".*?\]\}")/)[1]));
 
-describe('0.9.6: the iPhone web app offline and its phone layout', () => {
+describe('0.9.6 (0.18.3: the server page): the home screen web app and its layout', () => {
   test('the app shell is versioned and has every file the screens need offline', { skip: !has && 'no web build here' }, () => {
     const shell = shellOf();
     const pkg = join(restockDir, 'package.json');
@@ -30,15 +30,15 @@ describe('0.9.6: the iPhone web app offline and its phone layout', () => {
       if (!/\.(js|css|wasm)$/.test(f) || /tesseract|traineddata|worker\.min|zxing_writer|ppocrv5|ort-wasm|ocrWorker|maplibre-gl/i.test(f)) continue;
       assert.ok(files.has(`assets/${f}`), `assets/${f} is kept for offline`);
     }
-    // The database engine (the household's copy) is among them.
-    assert.ok([...files].some((f) => /sql-wasm.*\.wasm$/.test(f)), 'sql.js wasm');
+    // 0.18.3: the server's own page: no copy of the household (no database engine) and no photo reader.
+    assert.ok(!assets.some((f) => /sql-wasm|ppocrv5|ort-wasm|tesseract/.test(f)), 'none of the app screens');
     // The page's own scripts and styles.
     const html = readFileSync(join(built, 'index.html'), 'utf8');
     for (const m of html.matchAll(/(?:src|href)="\/?(assets\/[^"]+)"/g)) assert.ok(files.has(m[1]), `${m[1]} from the page`);
     assert.ok(!shell.files.some((f) => f.startsWith('api/') || f.startsWith('setup/')));
   });
 
-  test('the phone layout keeps clear of the notch and home bar, with the phone tab bar', { skip: !has && 'no web build here' }, () => {
+  test('the page keeps clear of the notch and home bar', { skip: !has && 'no web build here' }, () => {
     const html = readFileSync(join(built, 'index.html'), 'utf8');
     assert.match(html, /viewport-fit=cover/);
     assert.match(html, /name="apple-mobile-web-app-status-bar-style" content="black-translucent"/);
@@ -48,8 +48,7 @@ describe('0.9.6: the iPhone web app offline and its phone layout', () => {
       .join('\n');
     assert.match(css, /env\(safe-area-inset-top/);
     assert.match(css, /env\(safe-area-inset-bottom/);
-    assert.match(css, /\.pt-tabs/);
-    assert.match(css, /-webkit-overflow-scrolling:\s*touch/);
+    assert.match(css, /\.sv-side/);
   });
 
   test('the server always lets the page and the worker check for a new version (no stale shell)', async () => {

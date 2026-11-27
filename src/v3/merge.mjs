@@ -667,11 +667,11 @@ export function makeMerger(R) {
   // Auto delete runs nightly (and once soon after a start, so a restart doesn't skip a night): the
   // hourly check runs it in the 3 o'clock hour (the server's time zone: TZ, zone.mjs) at most once a day.
   let lastDaily = 0;
-  const zone = R.cfg?.timeZone || serverZone();
+  const zoneNow = () => R.zone?.() || R.cfg?.timeZone || serverZone();
   async function daily(force = false) {
     if (!R.engine || S.mode !== 'v3') return;
     if (!force && now() - lastDaily < 20 * 3600 * 1000) return;
-    if (!force && lastDaily && hourIn(now(), zone) !== 3 && now() - lastDaily < 26 * 3600 * 1000) return;
+    if (!force && lastDaily && hourIn(now(), zoneNow()) !== 3 && now() - lastDaily < 26 * 3600 * 1000) return;
     lastDaily = now();
     const cut = R.house.cutoff(now());
     if (cut) await pruneTo(cut);
