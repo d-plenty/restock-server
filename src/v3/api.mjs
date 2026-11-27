@@ -84,15 +84,15 @@ export async function makeV3(R) {
   // ---------- helpers ----------
 
   const iso = (t) => (t ? new Date(t).toISOString() : null);
-  const sealedAnswer = (actor, status, obj, req, res) => {
+  const sealedAnswer = (actor, status, obj, req, res, keyv = K.keyv) => {
     if (actor?.type === 'web3') return R.send(req, res, status, web.seal(actor.session.key, obj), SEALED);
     // 0.10.1: a phone that asks (X-Restock-Seal: rsf1) gets its answer sealed with the household's
     // server key, with its request's nonce inside, so nobody else on the network can read (or swap)
     // its Your data figures. 0.9.14 and 0.10.0 phones don't ask, and get them as before.
-    if (actor?.type === 'phone' && /\brsf1\b/.test(String(req.headers['x-restock-seal'] ?? '')) && K.serverKeys?.[String(K.keyv)]) {
+    if (actor?.type === 'phone' && /\brsf1\b/.test(String(req.headers['x-restock-seal'] ?? '')) && K.serverKeys?.[String(keyv)]) {
       const n = core?.parseAuthorization(req.headers.authorization)?.fields?.n ?? null;
       const msg = obj && typeof obj === 'object' && !Array.isArray(obj) ? { ...obj, reqN: n } : { value: obj, reqN: n };
-      return R.send(req, res, status, Buffer.from(core.sealRsf1(Buffer.from(K.serverKeys[String(K.keyv)], 'base64url'), msg)), SEALED);
+      return R.send(req, res, status, Buffer.from(core.sealRsf1(Buffer.from(K.serverKeys[String(keyv)], 'base64url'), msg)), SEALED);
     }
     return R.send(req, res, status, obj);
   };
@@ -130,6 +130,30 @@ export async function makeV3(R) {
    */
   function needLoginKey() {
     if (!S.account?.loginKey) throw new HttpError(409, 'signin', 'Sign out, then sign in again with your passphrase first (the new sign-in needs it once).');
+  }
+  /**
+   * 0.18.0: who looks after the phones. The web page (any sign-in) and a phone the server made an
+   * admin (Make admin, or an admin's code). A phone's request has to come sealed, and ask for its
+   * answer sealed (X-Restock-Seal: rsf1): the codes it makes let a new phone in.
+   */
+  const isAdminPhone = (actor) => actor?.type === 'phone' && actor.dev?.role === 'admin' && actor.dev?.api === 3;
+  function needManager(actor, req, change = true) {
+    if (actor?.type === 'web3') {
+      // A browser signed in with a phone looks after the phones only if that phone is an admin
+      // (any browser still sees the list). The passphrase sign-in always does.
+      if (!change || actor.kind === 'passphrase') return;
+      const by = actor.session?.device ? S.devices[actor.session.device] : null;
+      if (by && (by.status ?? 'active') === 'active' && by.role === 'admin') return;
+      throw new HttpError(403, 'admin', 'Only an admin can do that. Sign in with the passphrase, or with an admin phone.');
+    }
+    if (!actor) throw new HttpError(401, 'auth', 'Sign in first.');
+    if (!isAdminPhone(actor)) throw new HttpError(403, 'admin', 'Only an admin can do that. Ask an admin, or use the web page.');
+    if (!/\brsf1\b/.test(String(req.headers['x-restock-seal'] ?? ''))) throw new HttpError(400, 'sealed', 'Update Restock to do that from this phone.');
+  }
+  /** Making admins (a code for one, Make admin, Make user) and removing phones: the passphrase on the web page, or an admin phone. */
+  function needAdmin(actor, req) {
+    needManager(actor, req);
+    if (actor.type === 'web3' && actor.kind !== 'passphrase') throw new HttpError(403, 'passphrase', 'Sign in with your passphrase to do that.');
   }
   function needPhone(actor, api3 = true) {
     if (!actor || actor.type !== 'phone') throw new HttpError(actor ? 403 : 401, actor ? 'forbidden' : 'auth', actor ? 'Only a phone can do that.' : 'Sign in first.');
@@ -358,6 +382,12 @@ export async function makeV3(R) {
     // From here on: the house.
     needMode('v3');
 
+    // 0.18.0: a phone asks what it is on this server (an admin sees Phones and tablets in Settings → Sync).
+    if (path === '/api/v3/me' && method === 'GET') {
+      needPhone(actor);
+      return sealedAnswer(actor, 200, { device: actor.device, role: actor.dev.role === 'admin' ? 'admin' : 'user', label: actor.dev.label ?? actor.dev.name ?? null }, req, res);
+    }
+
     // ---------- files ----------
     if (path === '/api/v3/files' && method === 'GET') {
       if (!actor) throw new HttpError(401, 'auth', 'Sign in first.');
@@ -402,7 +432,7 @@ export async function makeV3(R) {
 
     // ---------- Server and phones ----------
     if (path === '/api/v3/phones' && method === 'GET') {
-      needWeb(actor);
+      needManager(actor, req, false);
       const phones = Object.entries(S.devices)
         .map(([device, d]) => {
           const sum = summaryOf(device);
@@ -419,16 +449,22 @@ export async function makeV3(R) {
             tooOld: !!core?.appTooOld?.(sum?.summary?.version),
             shares: R.engine.sharesOf(device),
             api: d.api ?? 2,
+            role: d.role === 'admin' ? 'admin' : 'user',
+            ...(actor.type === 'phone' && device === actor.device ? { me: true } : {}),
           };
         })
         .sort((a, b) => String(a.added).localeCompare(String(b.added)));
       return sealedAnswer(actor, 200, { phones }, req, res);
     }
     if (path === '/api/v3/phones' && method === 'POST') {
-      needWeb(actor);
+      needManager(actor, req);
+      if (actor.type === 'phone' && !sealedIn()) throw new HttpError(400, 'sealed', 'Update Restock to do that from this phone.');
       const b = input();
       const label = cleanName(b.label);
       if (!label) throw new HttpError(400, 'label', 'Give the phone a name, like "Sarah\'s phone".');
+      // 0.18.0: a code for an admin: the passphrase on the web page, or an admin phone.
+      const role = b.admin === true ? 'admin' : 'user';
+      if (role === 'admin') needAdmin(actor, req);
       for (const [k, v] of invites) if (v.expires < now()) invites.delete(k);
       if ([...invites.values()].filter((v) => !v.used).length >= V3_LIMITS.maxInvites) throw new HttpError(429, 'busy', 'Too many codes waiting. Use one or wait 10 minutes.');
       // Without RESTOCK_HOME_URL / RESTOCK_AWAY_URL, the addresses this page is opened with (as v2's
@@ -448,38 +484,58 @@ export async function makeV3(R) {
         if (house.refreshServerRow()) R.writeOwn();
       }
       const invite = b64u(randomBytes(32));
-      invites.set(b64u(R.sha256(Buffer.from(invite))), { expires: now() + V3_LIMITS.inviteMs, used: false, label });
+      invites.set(b64u(R.sha256(Buffer.from(invite))), { expires: now() + V3_LIMITS.inviteMs, used: false, label, role });
       const p = new URLSearchParams();
       if (house.home()) p.set('h', house.home());
       if (house.away()) p.set('a', house.away());
       p.set('i', invite);
       p.set('k', house.kexPub());
-      R.note('invite-made', { by: actor.by, label });
-      return sealedAnswer(actor, 200, { code: 'restock-server:3?' + p.toString(), expires: iso(now() + V3_LIMITS.inviteMs), expiresIn: V3_LIMITS.inviteMs / 1000, label, home: house.home(), away: house.away() }, req, res);
+      R.note('invite-made', { by: actor.by, label, ...(role === 'admin' ? { role } : {}) });
+      return sealedAnswer(actor, 200, { code: 'restock-server:3?' + p.toString(), expires: iso(now() + V3_LIMITS.inviteMs), expiresIn: V3_LIMITS.inviteMs / 1000, label, role, home: house.home(), away: house.away() }, req, res);
     }
     if ((m = /^\/api\/v3\/phones\/([^/]+)$/.exec(path)) && (method === 'PATCH' || method === 'DELETE')) {
-      needWeb(actor, method === 'DELETE' ? 'passphrase' : undefined);
+      const fromPhone = actor?.type === 'phone';
+      if (method === 'DELETE') needAdmin(actor, req);
+      else needManager(actor, req);
+      if (fromPhone && !sealedIn()) throw new HttpError(400, 'sealed', 'Update Restock to do that from this phone.');
       const device = m[1];
       const d = DEVICE.test(device) ? S.devices[device] : null;
       if (!d || (d.status && d.status !== 'active')) throw new HttpError(404, 'not-found', "That phone isn't on this server.");
       if (method === 'PATCH') {
-        const label = cleanName(input().label);
-        if (!label) throw new HttpError(400, 'label', 'Give the phone a name.');
-        d.label = label;
-        house.signMember(device, label, house.memberRow(device)?.pub ?? d.myPub ?? null);
-        R.writeOwn();
+        const b = input();
+        const label = b.label === undefined ? undefined : cleanName(b.label);
+        const role = b.role === undefined ? undefined : b.role === 'admin' ? 'admin' : b.role === 'user' ? 'user' : null;
+        if (label === undefined && role === undefined) throw new HttpError(400, 'label', 'Give the phone a name.');
+        if (label !== undefined && !label) throw new HttpError(400, 'label', 'Give the phone a name.');
+        if (role === null) throw new HttpError(400, 'role', 'A phone is an admin or a user.');
+        // 0.18.0: Make admin and Make user: the passphrase on the web page, or an admin phone.
+        if (role !== undefined) needAdmin(actor, req);
+        if (label !== undefined) {
+          d.label = label;
+          house.signMember(device, label, house.memberRow(device)?.pub ?? d.myPub ?? null);
+          R.writeOwn();
+        }
+        if (role !== undefined && (d.role === 'admin' ? 'admin' : 'user') !== role) {
+          if (role === 'admin') d.role = 'admin';
+          else delete d.role;
+          R.note('phone-role', { by: actor.by, device, role, name: d.label ?? d.name });
+        }
         await R.st.save();
-        R.note('phone-renamed', { by: actor.by, device, label });
-        return sealedAnswer(actor, 200, { device, label }, req, res);
+        if (label !== undefined) R.note('phone-renamed', { by: actor.by, device, label });
+        return sealedAnswer(actor, 200, { device, label: d.label ?? d.name, role: d.role === 'admin' ? 'admin' : 'user' }, req, res);
       }
-      needConfirm(actor, body.length ? input() : null, ip, 'remove-phone');
+      // An admin phone takes itself off with Leave (Settings → Sync), not here.
+      if (fromPhone && device === actor.device) throw new HttpError(403, 'forbidden', 'To take this phone off, use Leave this server.');
+      if (!fromPhone) needConfirm(actor, body.length ? input() : null, ip, 'remove-phone');
+      // The answer to a phone is sealed with the key it asked with: the household's new one reaches it in keys/.
+      const askedWith = K.keyv;
       house.remove(device);
       web.endPhoneSessions(device);
       R.endV2PhoneSessions(device);
       R.forgetNonces(device);
       await R.st.save();
       R.note('phone-removed', { by: actor.by, device, name: d.label ?? d.name });
-      return sealedAnswer(actor, 200, { removed: device, keyv: Number(K.keyv) }, req, res);
+      return sealedAnswer(actor, 200, { removed: device, keyv: Number(K.keyv) }, req, res, askedWith);
     }
 
     // ---------- settings ----------
@@ -699,7 +755,9 @@ export async function makeV3(R) {
       taken();
       joinNonces.set(b.n, now());
       const label = cleanName(row.name) || 'Phone';
+      const keepRole = was && (was.status ?? 'active') === 'active' && was.role === 'admin';
       const secret = house.admit(device, { name: label, pub, kex, myPub: row.pub, label });
+      if (keepRole) S.devices[device].role = 'admin';
       await R.st.save();
       R.writeOwn();
       R.note('phone-joined', { by: device, label, how: 'member' });
@@ -743,6 +801,8 @@ export async function makeV3(R) {
     S.house.seeded = true;
     const name = cleanName(b.name) || 'Phone';
     const secret = house.admit(device, { name, pub, kex, myPub, label: inv.label });
+    // 0.18.0: an admin's code makes an admin; any other code, a user.
+    if (inv.role === 'admin') S.devices[device].role = 'admin';
     await R.st.save();
     R.writeOwn();
     R.note('phone-joined', { by: device, label: inv.label, how: b.bring !== undefined ? 'bring' : 'invite' });

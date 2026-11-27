@@ -2,7 +2,7 @@
 
 Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock, shows your spending and price history in its **Data** tab, and gives you Restock in a web browser on any computer and [on iPhone](#restock-on-iphone).
 
-**Works with Restock 0.14.0 to 0.17.0** on your phones (Android, iPhone and iPad).
+**Works with Restock 0.14.0 to 0.18.0** on your phones (Android, iPhone and iPad).
 
 > **Update every phone to Restock 0.14.0 or newer first.** From server 0.15.0, a phone on an older version is turned away with "Update Restock on this phone to 0.14.0 or newer to keep syncing". It keeps everything it has and works on its own until it's updated. The server's **Server and phones** page lists any phone that needs updating. A server that still keeps a household from Restock 0.9.2 or 0.9.3 has [one step first](#already-using-the-server-with-restock-093).
 
@@ -131,12 +131,16 @@ Your passphrase never leaves the browser. The browser turns it into a key; the s
 ## 3. Add your phones
 
 1. On the web page, open **Server and phones** and choose **Add a phone**. Type who it's for, like *Sam's phone*. A QR code appears. It works once, for 10 minutes.
-2. On the phone, open Restock and go to **Settings → Sync and backups → Join your server**, and scan the code. The phone says *"This phone was added as Sam's phone on The Smiths"*.
+2. On the phone, open Restock and go to **Settings → Sync → Your Restock server**, and scan the code. The phone says *"This phone was added as Sam's phone on The Smiths"*.
 3. Choose [what this phone shares](#what-each-phone-shares), then do the same for each phone, with a new code each time.
 
 The code has the server's own key in it, so the phone knows it's talking to your server and nobody else can answer in its place. Each phone gets its own key for the server (the server keeps only its public half) and gets the household's keys sealed to it.
 
 **Server and phones** shows each phone, what it shares, its Restock version and when it was last seen. **Remove** takes a phone off straight away and gives the household a new key, so a lost or stolen phone can't read anything changed after that. Nothing it shared is deleted. A phone can also **Leave** by itself.
+
+### Admin phones (0.18.0)
+
+Each phone is a **user** or an **admin**. Phones start as users. On **Server and phones** (signed in with the passphrase), **Make admin** turns one into an admin, or tick **Make admin** when you add it. An admin does from Restock on the phone what this page does: in **Settings → Sync → Your Restock server → Phones and tablets** it adds phones and tablets (the same one-time code, for a user or an admin), renames them, makes them admins or users, and removes them. It can't remove itself (it uses Leave). The server checks every request, and an admin phone's requests and codes go sealed with the household's key. **Make user** takes it back. Each change is in Activity.
 
 <p align="center"><img src="docs/screenshots/web-add-phone-light.png" alt="Server and phones: Add a phone, with its one-time QR code, and the list of phones" width="720"></p>
 
@@ -377,7 +381,7 @@ Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-ser
 ### Updating from 0.9.4
 
 1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.17.0** (0.14.0 or newer is a must: older phones are turned away). Before server 0.15.0, phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
+2. **Update your phones to Restock 0.18.0** (0.14.0 or newer is a must: older phones are turned away). Before server 0.15.0, phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
 3. **Check Auto delete** in **Data → Manage data**. Your 0.9.4 **Keep data for** setting carries on as Auto delete (12 months unless you changed it).
 4. **Want to search the shops from the web page?** Run the [try-search script](#let-the-web-page-search-the-shops) to see which shops answer, then turn it on in Settings.
 
