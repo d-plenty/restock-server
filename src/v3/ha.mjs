@@ -268,15 +268,6 @@ export function makeHa(R) {
     soonTimer.unref?.();
   }
 
-  /** At the handover: the owner phone's Home Assistant moved here (its pairing too, so nothing is paired again). */
-  function tookOver(state) {
-    if (state && typeof state === 'object' && Array.isArray(state.pairs)) raw().prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run(HA_STATE, JSON.stringify(state));
-    if (K.ha) delete K.ha.state;
-    keys.save();
-    // Running it here from now on (it was on, on the phone): the row tells that phone to stop.
-    if (K.ha?.enabled && !blocked()) claim();
-  }
-
   /** What the web sees: never the token. */
   function view() {
     const p = haPhone();
@@ -356,5 +347,5 @@ export function makeHa(R) {
     }
   }
 
-  return { cleanPayload, round, start, stop, soon, tookOver, view, set, test, haPhone, blocked, status };
+  return { cleanPayload, round, start, stop, soon, view, set, test, haPhone, blocked, status };
 }

@@ -94,9 +94,6 @@ describe('browsers: challenge sign-in, MACs, sealed answers', () => {
       ['GET', '/api/v3/logs'],
       ['GET', '/api/v3/homeassistant'],
       ['PUT', '/api/v3/homeassistant'],
-      ['GET', '/api/v3/history?product=x'],
-      ['GET', '/api/v3/stats'],
-      ['GET', '/api/v3/specials'],
       ['GET', '/api/v3/browsers'],
       ['GET', '/api/v3/session'],
       ['POST', '/api/v3/prune'],
@@ -489,8 +486,6 @@ describe('what each phone shares (D9), and taking it back (section 14)', () => {
     assert.deepEqual(own.specials.lists.map((l) => l.chain), ['coles']);
     assert.deepEqual(own.specials.lists[0].items[0], { storeProductId: '123', name: 'Tim Tams', price: 3.5, wasPrice: 5, promo: '1/2 price', imageUrl: 'https://productimages.coles.com.au/x.jpg', isSpecial: true });
     assert.deepEqual(own.catalogues, { coles: { url: 'https://www.coles.com.au/catalogues', note: 'This week' } });
-    const sp = await t.web.get('/api/v3/specials');
-    assert.equal(sp.body.lists.length, 1);
     // An older list doesn't replace a newer one.
     const old = new Date(now - DAY).toISOString();
     await a.putOwn(a.file([], { shares: SHARE_PANTRY, specials: { at: old, lists: [{ chain: 'coles', at: old, items: [] }] } }));
@@ -613,33 +608,6 @@ describe('files: names, sizes, history and stats', () => {
     assert.equal(r.status, 401);
   });
 
-  test('history and stats from household.db', async () => {
-    const t = await house();
-    const a = await addPhone(t, 'A');
-    const now = Date.now();
-    await a.putOwn(
-      a.file(
-        [
-          ent('products', 'p1', now, a.device, { id: 'p1', chain: 'coles', name: 'Milk', created_at: 'x' }),
-          ent('prices', 'p1|' + daysAgo(40), now, a.device, { product_id: 'p1', date: daysAgo(40), price: 3, source: 'check' }),
-          ent('prices', 'p1|' + daysAgo(3), now, a.device, { product_id: 'p1', date: daysAgo(3), price: 2, was_price: 3, is_special: 1, promo: 'Save $1', source: 'check' }),
-          ent('receipts', 'r1', now, a.device, { id: 'r1', scanned_at: daysAgo(1), section: 'pantry', total: 42.5 }),
-        ],
-        { shares: { tabs: ['pantry'], receipts: true, cards: false } },
-      ),
-    );
-    t.settle();
-    const h = await t.web.get('/api/v3/history?product=p1');
-    assert.deepEqual(h.body.prices.map((p) => p.price), [3, 2]);
-    assert.deepEqual(Object.keys(h.body.prices[0]).sort(), ['date', 'is_special', 'member_only', 'price', 'product_id', 'promo', 'source', 'was_price']);
-    assert.equal((await t.web.get('/api/v3/history?product=p1&from=' + daysAgo(10))).body.prices.length, 1);
-    const st = await t.web.get('/api/v3/stats?months=3');
-    const month = st.body.months.find((m) => m.month === daysAgo(1).slice(0, 7));
-    assert.equal(month.receipts.pantry, 42.5);
-    const sp = await t.web.get('/api/v3/specials');
-    assert.equal(sp.body.specials[0].product_id, 'p1');
-  });
-
   test('the activity log says who did what; household.db and state survive a restart', async () => {
     const t = await house();
     const a = await addPhone(t, 'A');
@@ -724,7 +692,7 @@ describe('taken back, brought in, and the pages', () => {
     assert.equal(again.body.error, 'not-empty');
   });
 
-  test('the setup page has Set up this server; the app page may show the shops’ product photos only', async () => {
+  test('the setup page has Set up this server; the page shows pictures from this server only', async () => {
     const t = await start();
     const r = await fetch(t.base + '/setup/');
     assert.match(await r.text(), /Set up this server/);
@@ -733,9 +701,8 @@ describe('taken back, brought in, and the pages', () => {
     await b.setup({ passphrase: PASS, iterations: ITER });
     const app = await b.raw('GET', '/');
     const csp = app.headers.get('content-security-policy');
-    assert.match(csp, /img-src 'self' data: blob: https:\/\/\*\.woolworths\.media https:\/\/productimages\.coles\.com\.au/);
-    assert.doesNotMatch(csp, /img-src[^;]* https:(;| )/);
-    assert.match(csp, /connect-src 'self'/);
+    assert.match(csp, /img-src 'self' data: blob:;/);
+    assert.match(csp, /connect-src 'self';/);
   });
 });
 

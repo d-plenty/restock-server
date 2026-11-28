@@ -77,8 +77,9 @@ describe('the home screen web app', () => {
       // blob: is for the receipt reader's own worker (tesseract.js), as in 0.9.4; no other place.
       assert.deepEqual(d.get('worker-src'), ["'self'", 'blob:']);
       assert.deepEqual(d.get('default-src'), ["'self'"]);
-      // 0.9.13: the web app may also send feedback to Restock's own inbox (one fixed address); the setup page may not.
-      assert.deepEqual(d.get('connect-src'), csp === APP_CSP ? ["'self'", 'https://restock-prices.plenty.family'] : ["'self'"]);
+      // 0.19.0: the page talks to this server and nothing else (feedback and shop pictures went with the old web app).
+      assert.deepEqual(d.get('connect-src'), ["'self'"]);
+      assert.deepEqual(d.get('img-src'), ["'self'", 'data:', 'blob:']);
       assert.deepEqual(d.get('script-src'), ["'self'", "'wasm-unsafe-eval'"]);
       assert.deepEqual(d.get('frame-ancestors'), ["'none'"]);
       assert.deepEqual(d.get('object-src'), ["'none'"]);
@@ -112,7 +113,7 @@ describe('the home screen web app', () => {
   // The real build, when this copy of the server has one (npm run build:server-web in Restock), or
   // the folder RESTOCK_WEB_BUILT names (SERVER_WEB_OUT=<folder> npm run build:server-web).
   const built = process.env.RESTOCK_WEB_BUILT ? resolve(process.env.RESTOCK_WEB_BUILT) : resolve(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'app');
-  test('the real build: installable manifest, icons and a service worker with its app shell', { skip: !existsSync(join(built, 'sw.js')) && 'public/app has no 0.9.5 build' }, () => {
+  test('the real build: installable manifest and icons, and a worker that only takes the old one off', { skip: !existsSync(join(built, 'sw.js')) && 'public/app has no 0.9.5 build' }, () => {
     const m = JSON.parse(readFileSync(join(built, 'pwa', 'manifest.webmanifest'), 'utf8'));
     assert.equal(m.name, 'Restock');
     assert.equal(m.short_name, 'Restock');
@@ -130,14 +131,11 @@ describe('the home screen web app', () => {
     assert.match(html, /<link rel="apple-touch-icon" href="pwa\/apple-touch-icon\.png">/);
     assert.match(html, /name="apple-mobile-web-app-capable" content="yes"/);
     assert.match(html, /viewport-fit=cover/);
+    // 0.19.0: the page keeps no copy of itself: sw.js only takes the earlier worker and its copies off.
     const sw = readFileSync(join(built, 'sw.js'), 'utf8');
-    assert.doesNotMatch(sw, /__RESTOCK_SHELL_MANIFEST__/);
     assert.doesNotMatch(sw, /^\s*import\s/m);
-    const shell = JSON.parse(JSON.parse(sw.match(/("\{\\"build\\".*?\]\}")/)[1]));
-    assert.ok(shell.files.includes('index.html'));
-    for (const f of shell.files) {
-      assert.ok(existsSync(join(built, f)), `${f} is in the build`);
-      assert.ok(!f.startsWith('api/'), 'nothing from the API');
-    }
+    assert.match(sw, /unregister\(\)/);
+    assert.match(sw, /caches\.delete/);
+    assert.doesNotMatch(sw, /fetch/);
   });
 });

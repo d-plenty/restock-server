@@ -2,13 +2,13 @@
 
 Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock and keeps your household's history. Its web page looks after the phones, the data and the server's settings (and **Server admin** on an admin phone does the basics on the go). It can also keep each phone's backup, so a lost phone can be put back.
 
-**Works with Restock 0.14.0 to 0.18.4** on your phones (Android, iPhone and iPad).
+**Works with Restock 0.14.0 to 0.19.0** on your phones (Android, iPhone and iPad).
 
-> **Update every phone to Restock 0.14.0 or newer first.** From server 0.15.0, a phone on an older version is turned away with "Update Restock on this phone to 0.14.0 or newer to keep syncing". It keeps everything it has and works on its own until it's updated. The server's **Phones and admins** page lists any phone that needs updating. A server that still keeps a household from Restock 0.9.2 or 0.9.3 has [one step first](#already-using-the-server-with-restock-093).
+> **Update every phone to Restock 0.14.0 or newer first.** From server 0.15.0, a phone on an older version is turned away with "Update Restock on this phone to 0.14.0 or newer to keep syncing". It keeps everything it has and works on its own until it's updated. The server's **Phones and admins** page lists any phone that needs updating.
 
 > **Local first, always.** Every phone keeps its own full copy of what it shares. Your list, pantry and receipts work with no signal and with the server off; changes go up at the next sync. Only searching the shops needs the internet. **The server is optional:** a phone never needs it to work.
 
-- **The server is the house.** It's a member of your household that never sleeps, and its owner. It holds the household's keys, merges what the phones share (with the same code the phones and the web app use), and hands each phone its keys when you add it.
+- **The server is the house.** It's a member of your household that never sleeps, and its owner. It holds the household's keys, merges what the phones share (with the same code the phones use), and hands each phone its keys when you add it.
 - **Sealed on the wire.** Everything phones send or get is sealed and signed, even over plain `http://` at home. Browsers sign in without sending your passphrase or anything reusable.
 - **Readable at rest, so keep it private.** To merge, keep history and run Home Assistant, the server can read what phones share with it. See [what the server can read](#what-the-server-can-read) and keep its data folder private.
 - **It talks to your phones, your Home Assistant and nothing else,** apart from asking GitHub once a day for the newest version number (Server settings → Updates and moving can turn that off). It never contacts the shops.
@@ -32,8 +32,7 @@ The pictures on this page use sample data.
 - [Sign in with a phone](#sign-in-with-a-phone)
 - [At home and away](#at-home-and-away)
 - [Backups](#backups), [the recovery key](#the-recovery-key), [forgot your passphrase?](#forgot-your-passphrase) and [recovering deleted files](#recovering-deleted-files)
-- [Updating](#updating) and [updating from 0.9.4](#updating-from-094)
-- [Already using the server with Restock 0.9.3?](#already-using-the-server-with-restock-093) and [a household made on phones](#a-household-made-on-phones)
+- [Updating](#updating) (0.19.0 needs Restock 0.14.0 or newer on every phone) and [a household made on phones](#a-household-made-on-phones)
 - [What the server can read](#what-the-server-can-read)
 - [Settings](#settings) and [what's in the data volume](#whats-in-the-data-volume)
 - [Problems?](#problems)
@@ -208,8 +207,6 @@ Nothing here deletes your shopping list, your pantry, the newest price of each p
 **How long data is kept** (on Data) deletes data older than you choose, every night at about 3 am (in the server's time zone): **3, 6 or 12 months, 2 years, or until deleted**. It covers prices, receipts and their photos, the phones' moved-off history (`archive/`), statistics and logs, with the same things kept as above.
 
 - **Off is the start** on a new server: nothing is deleted until you delete it.
-- **A server updated from 0.9.4 keeps its setting** (12 months unless you changed it).
-- **Phones on 0.9.4 only understand 3, 6, 9 or 12 months:** with 2 years they show it as off, but the server still deletes older data every night.
 - **Turning it on, or making it shorter,** deletes straight away, so it needs **DELETE**, your passphrase and a yes on an admin phone.
 - **Each phone keeps its own price history,** as long as its own setting says.
 
@@ -219,7 +216,7 @@ Each phone chooses, in **Your server → What this phone shares**: **Groceries**
 
 Turning something off stops sending it; what it already shared stays on the server, unless you tick **Also take what this phone shared off the server**, which deletes that phone's own shared things for that tab (other people's stay). Prices and product details found at the shops stay for the household: they're about the shops, not about you.
 
-**What searches found (0.11.0).** A phone on Restock 0.11.0 also sends what its searches and scans turned up: the product, the shop, its price that day, its barcode and whether it was in stock, whether or not it was added to anything. It's history about the shops, kept with the prices deleted with them by Delete some and How long data is kept, and never sent on anywhere. It's never used as a current price. Phones before 0.11.0 don't send it.
+**What searches found.** A phone also sends what its searches and scans turned up: the product, the shop, its price that day, its barcode and whether it was in stock, whether or not it was added to anything. It's history about the shops, kept with the prices deleted with them by Delete some and How long data is kept, and never sent on anywhere. It's never used as a current price.
 
 ## Home Assistant
 
@@ -227,7 +224,7 @@ In a household on the server, the shopping list syncs with Home Assistant **from
 
 A voice add that matches one of your items goes on that item's list (Pantry first, then Bottle shop, then Chemist). One that matches nothing goes on the **General** list.
 
-The token is kept on the server only (in `keys.json`); it's never shown again, never sent to phones or browsers, and never written in the logs. Plain `http://` only goes to an address at home or on Tailscale; anything else needs `https://`. If a phone ran Home Assistant before (Restock 0.9.3), it moves here when you hand the household over or when that phone updates; until then the server won't run it twice, and the page says where it's still running.
+The token is kept on the server only (in `keys.json`); it's never shown again, never sent to phones or browsers, and never written in the logs. Plain `http://` only goes to an address at home or on Tailscale; anything else needs `https://`.
 
 ## Sign in with a phone
 
@@ -340,61 +337,28 @@ Then run the same `docker run` command as before. Your data stays in the volume.
 
 Each version is also tagged by number (for example `ghcr.io/d-plenty/restock-server:0.15.0`) if you'd rather choose when to update. It needs Node 22.13 or newer if you run it without Docker (it says so and stops otherwise).
 
-### Updating from 0.9.4
-
-1. **Update the server** as above. Your household, phones, history and settings stay. There's nothing to scan or hand over.
-2. **Update your phones to Restock 0.18.3** (0.14.0 or newer is a must: older phones are turned away). Before server 0.15.0, phones still on 0.14.0, 0.13.1, 0.13.0, 0.12.10, 0.12.9, 0.12.8, 0.12.7, 0.12.6, 0.12.5, 0.12.4, 0.12.3, 0.12.2, 0.12.1, 0.12.0, 0.11.3, 0.11.2, 0.11.1, 0.11.0, 0.10.12, 0.10.11, 0.10.10, 0.10.9, 0.10.8, 0.10.7, 0.10.6, 0.10.5, 0.10.4, 0.10.3, 0.10.2, 0.10.1, 0.10.0, 0.9.14, 0.9.13, 0.9.12, 0.9.11, 0.9.10, 0.9.9, 0.9.8, 0.9.7, 0.9.6, 0.9.5 or 0.9.4 keep syncing as before.
-3. **Check How long data is kept** on **Data**. Your 0.9.4 setting carries on (12 months unless you changed it).
-
-Good to know:
-
-- **Phones still on 0.9.4 don't show the General list.** Its lines stay on the server and the 0.9.5 phones, and reach that phone when it updates.
-- **Ask phones to resend** only works with Restock 0.9.5 phones.
-- **Pharmacy was renamed Health in 0.9.x, and from 0.10.10 it is Chemist** (and Keg is Bottle shop), on the web page and the phones. Nothing else about them changed.
-- **Spending** starts from what's ticked off on your list now and from here on. What was ticked off and cleared before the update isn't counted.
-
-## Already using the server with Restock 0.9.3?
-
-**From server 0.15.0 a household kept the 0.9.3 way isn't served any more.** The server finds it when it starts, says so in its log and on its web page, and does nothing else with it: nothing is deleted. To carry on:
-
-1. Run **restock-server 0.14.1** once (`ghcr.io/d-plenty/restock-server:0.14.1`), with the same data folder.
-2. Put **Restock 0.14.1** on the household's owner phone.
-3. On the web page, sign in, open **Server and phones → Take this household** (on restock-server 0.14.1's page). A QR code appears (10 minutes, once).
-4. On the owner phone, open **Your server → Hand this household to the server** and scan it.
-5. Then update the server to 0.15.0, and every phone to 0.14.0 or newer.
-
-What the handover does, on 0.14.1:
-
-The owner phone seals the household's keys, its owner key and (if it runs it) Home Assistant to the server's key. The server checks them against the household before changing anything, then reads every phone's file into its own copy and becomes the owner. The other phones carry on without scanning anything: they update themselves to the server at their next sync. A phone still on 0.9.3 says *"Update Restock to keep syncing with your server"*, keeps everything it has and works on its own until you update it. What the household shares (its tabs and receipts) stays as it was until every phone in it is on 0.9.4 or newer, so a phone still on 0.9.3 never starts sharing more because of the move; after that each phone decides for itself ([what each phone shares](#what-each-phone-shares)).
-
-If the server stops part-way (a power cut, say), it either finishes or puts everything back as it was when it starts again; the owner phone stays the owner until it sees the change, so you can just try again.
-
-### A household made on phones
+## A household made on phones
 
 If your phones already share a household over Wi-Fi or a cloud drive folder: on a new server, scan the first **Add a phone** code with the household's owner phone, and choose **Bring <household> onto <server>**. The other phones see the change and offer to connect themselves. A phone that isn't in a household, or is in another one, joins and its things on the tabs it shares go up.
 
 ## What the server can read
 
-**In a household on the server (0.9.4 and newer),** the server can read what phones share with it: the shopping lists and pantry, Bottle shop and Chemist if shared, receipts and their photos if shared, prices including years of history, what's been ticked off (for spending), the household record, each phone's settings summary, the Home Assistant token, and the activity log and logs. It needs to, to merge, keep history and statistics, run Home Assistant and show the web app. Loyalty card numbers are blanked before they reach its database (a phone that shares cards still puts them in its sealed file, which the server can open).
+**The server can read** what phones share with it: the shopping lists and pantry, Bottle shop and Chemist if shared, receipts and their photos if shared, prices including years of history, what's been ticked off (for spending), the household record, each phone's settings summary, the Home Assistant token, and the activity log and logs. It needs to, to merge, keep history and statistics, run Home Assistant and show the web page. Loyalty card numbers are blanked before they reach its database (a phone that shares cards still puts them in its sealed file, which the server can open).
 
 **It never has:** anything a phone doesn't share, your passphrase, or the phones' private keys. A phone's [backup](#phone-backups) (0.18.4) is sealed to a key only the passphrase opens: the server keeps it, but can't read it.
 
-**It never talks to the shops.** (Before 0.18.3, *Let the web page search the shops* could; that went with the web page's shopping screens.) Once a day it asks GitHub for the newest version number, unless that's turned off.
+**It never talks to the shops.** Once a day it asks GitHub for the newest version number, unless that's turned off.
 
-**Phones can read the statistics (0.9.14).** A phone in the household can read the statistics (spending, top items, price series and storage) for its Settings → Your data, signed as that phone. It can't export, delete or change anything there. **From 0.10.0** a phone can also add the spending it worked out before it joined (`POST /api/v3/data/spend`, up to 5,000 lines a time, signed as that phone), unless Share my spending with the server is off on it. It can only add, never change or delete. **From 0.10.1** both are sealed with the household's server key (the phone asks with `X-Restock-Seal: rsf1`), so they're as private on the network as sync; 0.9.14 and 0.10.0 phones still get them as before until they update.
-
-**Feedback from the web page (0.9.13)** goes from your browser straight to Restock's own feedback inbox (`restock-prices.plenty.family`), only when someone presses Send in Settings → Send feedback, never through or from the server. The web app's Content-Security-Policy allows that one address and nothing else outside the server.
+**Phones can read the statistics.** A phone in the household can read the statistics (spending, top items, price series and storage) for its Settings → Your data, signed as that phone. It can't export, delete or change anything there. A phone can also add the spending it worked out before it joined (`POST /api/v3/data/spend`, up to 5,000 lines a time, signed as that phone), unless Share my spending with the server is off on it. It can only add, never change or delete. **From 0.10.1** both are sealed with the household's server key (the phone asks with `X-Restock-Seal: rsf1`), so they're as private on the network as sync; 0.9.14 and 0.10.0 phones still get them as before until they update.
 
 **Anyone with a copy of the data folder can read all of the above.** So:
 
 - keep the data folder private (don't share the volume or dataset, and keep its backups as private as the server);
 - put it on an encrypted disk if you can (an encrypted TrueNAS dataset, LUKS, FileVault, BitLocker);
 - use the [encrypted backup](#backups) for copies that leave the machine, and keep the Data page's exports private too;
-- run the server yourself, from this image, on a machine you trust: it also serves the web app to your browser.
+- run the server yourself, from this image, on a machine you trust: it also serves the web page to your browser.
 
 On the network everything stays sealed: phone traffic always, browser traffic too (with the plain-http caveat above). The makers of Restock never see any of it.
-
-**A 0.9.3 household (before the handover)** is still end-to-end encrypted: the server stores sealed files it can't open and sees only file names, sizes, times, the phones' names and the activity log.
 
 ## Settings
 
@@ -434,11 +398,10 @@ How long data is kept, the addresses, the time zone (over `TZ`), sign-in and Hom
 │   └── photos/<sha256>.bin             receipt and product photos
 ├── trash/<when>/       deleted or replaced archive/ and photos/ files, kept 30 days
 ├── tmp/                half-written uploads (cleared at start)
-├── activity.jsonl      the activity log of a 0.9.3 household (moved into household.db at the handover)
 └── reset-passphrase    only if you create it (see above)
 ```
 
-Before the handover a 0.9.3 household's files are as they were (`restock-sync-keys-<id>.json`, `webkeys/`), and there's no `household.db`. Writes are atomic: a crash leaves the old file or the new one, never half of each.
+Writes are atomic: a crash leaves the old file or the new one, never half of each.
 
 ## Problems?
 
@@ -450,7 +413,7 @@ Leave out your passphrase, recovery key, backup files, export files, addresses a
 
 ## For developers
 
-The protocol is in the Restock repo: [docs/server-protocol.md](https://github.com/d-plenty/Restock/blob/main/docs/server-protocol.md) (v2, "v3" for 0.9.4, and the 0.9.5 parts at the end: web search, Data and the `restock-export` format) and the design, [docs/server-v3-design.md](https://github.com/d-plenty/Restock/blob/main/docs/server-v3-design.md). v2 (a 0.9.3 household's sealed files) is no longer served from 0.15.0: a server in `mode: "v2"` answers every request with what to do (`old-household`). The account routes (the setup page's first sign-in, the passphrase) moved to `/api/v3/account/` in 0.15.1; only `GET /api/v2/health` is left of v2. v3, in short:
+The protocol is in the Restock repo: [docs/server-protocol.md](https://github.com/d-plenty/Restock/blob/main/docs/server-protocol.md) (the parts still served are "v3", Data and the `restock-export` format) and the design, [docs/server-v3-design.md](https://github.com/d-plenty/Restock/blob/main/docs/server-v3-design.md). A data folder that still holds a household from Restock 0.9.3 or older isn't served: the server answers every request with `old-household` (start a new household on an empty data folder; the phones bring their own copies). The account routes (the setup page's first sign-in, the passphrase) moved to `/api/v3/account/` in 0.15.1; only `GET /api/v2/health` is left of v2. v3, in short:
 
 | Method and path | Who |
 | --- | --- |
@@ -459,37 +422,35 @@ The protocol is in the Restock repo: [docs/server-protocol.md](https://github.co
 | `POST /api/v3/logout`, `GET /api/v3/session`, `GET /api/v3/browsers`, `DELETE /api/v3/browsers/<id>` | session |
 | `POST /api/v3/setup` | passphrase session, mode `new` |
 | `POST /api/v3/join` | invite holder, or a household member (its signature) |
-| `POST /api/v3/upgrade`, `POST /api/v3/handover/<token>` | phone (its v2 key) |
 | `DELETE /api/v3/devices/<me>` | phone (Leave) |
 | `GET /api/v3/files`, `GET`/`PUT`/`DELETE /api/v3/files/<name>` | phone or session (`keys/<phone>.bin`: that phone only) |
 | `POST /api/v3/qrlogin`, `GET /api/v3/qrlogin/<id>` / `POST /api/v3/qrlogin/<id>` | anyone / phone |
 | `GET`/`POST /api/v3/phones`, `PATCH`/`DELETE /api/v3/phones/<d>` | session (Remove: passphrase session) |
 | `GET`/`PUT /api/v3/settings`, `POST /api/v3/prune` | session (changes: passphrase session) |
 | `POST /api/v3/passphrase`, `GET /api/v3/recovery`, `POST /api/v3/backup` | passphrase session (bodies sealed) |
-| `GET /api/v3/activity`, `GET /api/v3/logs`, `GET /api/v3/history`, `GET /api/v3/stats`, `GET /api/v3/specials` | session |
+| `GET /api/v3/activity`, `GET /api/v3/logs` | session |
 | `GET`/`PUT /api/v3/homeassistant`, `POST …/test`, `POST …/sync` | session (changes: passphrase session; the token only sealed, never answered) |
-| `POST /api/v3/handover` | passphrase session, mode `v2` |
-| `POST /api/v3/search`, `POST /api/v3/search/add` | session, only with `webSearch` on (0.9.5) |
-| `GET /api/v3/data/summary`, `…/stats`, `…/top`, `…/series`, `…/export`, `…/export/prices`, `…/export/ticked`, `GET /api/v3/data/autodelete` | session (0.9.5) |
-| `POST /api/v3/data/delete`, `…/delete-everything`, `PUT /api/v3/data/autodelete`, `POST /api/v3/data/resend`, `…/recount` | passphrase session; deletes need the typed word and a fresh passphrase proof (0.9.5) |
+| `POST /api/v3/addresses/test` | session (0.19.0: do the home and away addresses answer, as this server?) |
+| `GET`/`PUT /api/v3/backupkey`, `GET`/`POST /api/v3/restore`, `POST`/`GET /api/v3/phone-backup/<d>` | phone or session (0.18.4, see Phone backups) |
+| `GET /api/v3/data/summary`, `…/stats`, `…/top`, `…/series`, `…/export`, `…/export/prices`, `…/export/ticked`, `GET /api/v3/data/autodelete` | session |
+| `POST /api/v3/data/delete`, `…/delete-everything`, `PUT /api/v3/data/autodelete`, `POST /api/v3/data/resend`, `…/recount` | passphrase session; deletes need the typed word and a fresh passphrase proof |
 
-Browsers sign every request (`Authorization: RestockWeb3 s=, t=, n=, m=`, an HMAC with the session key) and every answer with household data is sealed (`Content-Type: application/x-restock-sealed`). There are no cookies in v3, so another site can't use a session. Phones sign as in v2 (`Restock2`). Errors are `{ "error": "<code>", "message": "<something to show people>" }`; v3 adds `mode`, `released`, `update` (403, with `api: 3`), `done`, `handover`, `member`, `device-taken`, `challenge`, `current`, `weak`, `core`, and in 0.9.5 `web-search-off`, `search-gone`, `rate-server`, `confirm` and `typed`.
+Browsers sign every request (`Authorization: RestockWeb3 s=, t=, n=, m=`, an HMAC with the session key) and every answer with household data is sealed (`Content-Type: application/x-restock-sealed`). There are no cookies in v3, so another site can't use a session. Phones sign as in v2 (`Restock2`). Errors are `{ "error": "<code>", "message": "<something to show people>" }`; v3 adds `mode`, `released`, `update` (403, with `api: 3`), `done`, `handover`, `member`, `device-taken`, `challenge`, `current`, `weak`, `core`, `confirm` and `typed`.
 
-Limits: 10 wrong sign-ins (or made-up invites, or bad member signatures) from one address lock it out for 15 minutes; 1,200 requests a minute per address; 30 sign-in challenges a minute per address; 10 sign-in codes per 10 minutes per address; sessions end after 30 days unused (12 hours for a phone sign-in); 10 shop searches a minute per browser and 60 an hour per server; Ask phones to resend once a day.
+Limits: 10 wrong sign-ins (or made-up invites, or bad member signatures) from one address lock it out for 15 minutes; 1,200 requests a minute per address; 30 sign-in challenges a minute per address; 10 sign-in codes per 10 minutes per address; sessions end after 30 days unused (12 hours for a phone sign-in); Ask phones to resend once a day.
 
-The server has no npm packages. It runs the **Restock core** (`core/restock-core.mjs`: the merge engine, crypto, household settings, Home Assistant's sync and, from 0.9.5, the phone's shop search, the same code as the web app), built from a Restock checkout:
+The server has no npm packages. It runs the **Restock core** (`core/restock-core.mjs`: the merge engine, crypto, household settings, and Home Assistant's sync, the same code as the phones), built from a Restock checkout:
 
 ```sh
 RESTOCK_DIR=../Restock npm test       # builds core/ from Restock (default: the parent folder if it's a Restock checkout), then all the tests
 DATA_DIR=./data npm start             # http://localhost:8787
 node test/e2e-server.mjs              # a throwaway server on a temp folder; prints its URL and port
 node test/e2e-server.mjs --ready      # ...with a passphrase set, a session and a phone invite
-node scripts/try-search.mjs           # which shops answer this machine (asks each once; saves nothing)
 ```
 
-`test/client.mjs` has v2 and v3 browsers and phones for tests against a real server; `test/fake-ha.mjs` is a pretend Home Assistant. `RESTOCK_TEST_CRASH=after-keys|after-db|after-mode` stops the server part-way through a handover (for the tests only).
+`test/client.mjs` has browsers and phones for tests against a real server; `test/fake-ha.mjs` is a pretend Home Assistant.
 
-Build the image yourself: `docker build -t restock-server .` fetches Restock at the tag in the [Dockerfile](Dockerfile) (`RESTOCK_REF`) and builds the web app and the core. To build without fetching, run `npm run build:server-web` and `npm run build:server-core` in a Restock checkout, copy its `server/public/app/` and `server/core/` here, and run `docker build --build-arg WEB=local -t restock-server .`. Without a web app, the server still syncs phones and shows a short "web app not built" page; without the core it can't keep a household.
+Build the image yourself: `docker build -t restock-server .` fetches Restock at the tag in the [Dockerfile](Dockerfile) (`RESTOCK_REF`) and builds the web page and the core. To build without fetching, run `npm run build:server-web` and `npm run build:server-core` in a Restock checkout, copy its `server/public/app/` and `server/core/` here, and run `docker build --build-arg WEB=local -t restock-server .`. Without the web page, the server still syncs phones and shows a short "not built" page; without the core it can't keep a household.
 
 Releases: bump `version` in `package.json`, `restock/config.yaml` and `restock/Dockerfile`, and `RESTOCK_REF` in the Dockerfile, then publish a GitHub release tagged `v<version>`. [The image workflow](.github/workflows/image.yml) checks they agree, builds for amd64 and arm64 and pushes `ghcr.io/d-plenty/restock-server:<version>` and `:latest`.
 

@@ -269,27 +269,10 @@ export const PAGE_CSP = [
   "frame-ancestors 'none'",
 ].join('; ');
 /**
- * 0.9.4: the web app's page may also show product photos, but only from the shops' own picture
- * servers (src/stores/* in the Restock repo), never any https: address (a household member could
- * otherwise plant a "tracking pixel" that reports a browser's address). Adding a shop means adding
- * its image host here. The web loads them with referrerPolicy="no-referrer".
+ * 0.19.0: the web page is the admin page only (since 0.18.3): it shows no shop pictures and sends no
+ * feedback, so it gets the same rules as the setup page and talks to this server alone.
  */
-export const IMAGE_HOSTS = [
-  'https://*.woolworths.media', // Woolworths (cdn0.woolworths.media/content/wowproductimages/...)
-  'https://productimages.coles.com.au', // Coles
-  'https://dm.apac.cms.aldi.cx', // Aldi (the product API's assets)
-  'https://media.danmurphys.com.au', // Dan Murphy's
-  'https://edgmedia.bws.com.au', // BWS
-  'https://static.chemistwarehouse.com.au', // Chemist Warehouse
-  'https://cdn.shopify.com', // shops on Shopify (smaller pharmacies and bottle shops)
-  'https://images.openfoodfacts.org', // barcode look-ups (Open Food Facts' image_small_url)
-];
-/** 0.9.13: Settings → Feedback sends to Restock's own feedback inbox, only when Send is pressed (never this household's data). */
-export const FEEDBACK_HOST = 'https://restock-prices.plenty.family';
-export const APP_CSP = PAGE_CSP.replace("img-src 'self' data: blob:", `img-src 'self' data: blob: ${IMAGE_HOSTS.join(' ')}`).replace(
-  "connect-src 'self'",
-  `connect-src 'self' ${FEEDBACK_HOST}`,
-);
+export const APP_CSP = PAGE_CSP;
 /** For the API: nothing it returns is ever a page. */
 const API_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox";
 

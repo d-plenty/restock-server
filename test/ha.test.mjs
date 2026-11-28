@@ -131,37 +131,6 @@ describe('Home Assistant on the server', () => {
     }
   });
 
-  test("a phone's upgrade brings its Home Assistant, sealed to the server (taken only if the server has none)", async () => {
-    const { t, ha } = await withHa();
-    try {
-      const a = await addPhone(t, 'A');
-      t.state.devices[a.device].api = 2;
-      const a2 = await addPhone(t, 'A2');
-      // Only the phone the household says runs Home Assistant (ha:phone) brings it: another
-      // member's isn't taken (it could point the server's requests anywhere).
-      t.R.merger.raw().prepare('INSERT OR REPLACE INTO household_settings (k, v) VALUES (?, ?)').run('ha:phone', JSON.stringify(a.device));
-      const not = await a2.upgrade(t.R.house.kexPub(), { address: 'http://10.0.0.7:8123', entity: 'todo.shopping_list', enabled: true, token: 'not-the-ha-phone-0123', state: null });
-      assert.equal(not.status, 200, JSON.stringify(not.body));
-      assert.equal(not.body.ha, undefined);
-      assert.equal(t.R.keys.data.ha?.token, undefined);
-      const r = await a.upgrade(t.R.house.kexPub(), { address: ha.url, entity: 'todo.shopping_list', enabled: true, token: TOKEN, state: { pairs: [], pick: [] } });
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.equal(r.body.ha, true);
-      assert.equal(t.R.keys.data.ha.token, TOKEN);
-      assert.equal((await t.web.get('/api/v3/homeassistant')).body.enabled, true);
-      // Moved from that phone: the row names the server now.
-      assert.equal(JSON.parse(rows(t, "SELECT v FROM household_settings WHERE k = 'ha:phone'")[0].v), 'srv-' + t.sid);
-      // A second phone's can't replace it.
-      const b = await addPhone(t, 'B');
-      t.state.devices[b.device].api = 2;
-      const r2 = await b.upgrade(t.R.house.kexPub(), { address: 'http://10.0.0.9:8123', entity: 'todo.groceries', enabled: true, token: 'other-token-0123456789', state: null });
-      assert.equal(r2.body.ha, undefined);
-      assert.equal(t.R.keys.data.ha.token, TOKEN);
-    } finally {
-      await ha.close();
-    }
-  });
-
   test('plain http only to an address at home', async () => {
     const t = await house();
     await t.web.req('PUT', '/api/v3/homeassistant', { sealed: { address: 'http://203.0.113.9:8123', entity: 'todo.shopping_list', enabled: true, token: TOKEN } });

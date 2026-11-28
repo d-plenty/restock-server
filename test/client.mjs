@@ -204,14 +204,6 @@ export class V3Phone extends Phone {
     if (r.status === 200) this.takeGift(serverKex, n, body.sealed);
     return { status: r.status, body };
   }
-  async upgrade(serverKex, ha) {
-    const n = b64u(randomBytes(16));
-    const b = { kex: b64u(this.kex.pub), myPub: this.my.pub, n };
-    if (ha) b.ha = b64u(core.sealHa(core.haKey(this.kex.priv, u8(serverKex), u8(n)), this.device, ha));
-    const r = await this.req('POST', '/api/v3/upgrade', { json: b });
-    if (r.status === 200) this.takeGift(serverKex, n, r.body.sealed);
-    return r;
-  }
   /** Its own sync file (folder-sync format, plus shares), sealed with the newest serverKey. */
   file(entries, more = {}) {
     return { format: 'restock-sync', v: 1, device: this.device, name: this.name, keyv: this.keyv, at: new Date().toISOString(), top: entries.length, seen: {}, entries, ...more };

@@ -4,7 +4,7 @@
 // bring), Remove with a rekey, Leave, and the handover from an owner phone, with its crash recovery.
 // docs/server-v3-design.md sections 4 and 7; the bytes are docs/server-protocol.md "v3".
 
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateKeyPairSync, randomBytes, createPublicKey } from 'node:crypto';
 import { atomicWriteSync } from '../state.mjs';
@@ -25,7 +25,7 @@ function newKex() {
 }
 
 /** The parts of keys.json a household brings (a handover's, cleared when it's rolled back). */
-const HOUSE_PARTS = ['owner', 'hid', 'keyv', 'keys', 'serverKeys', 'oldkey', 'oldkey_until', 'secrets', 'recovery', 'recoverySaved', 'ha', 'handoverPending'];
+const HOUSE_PARTS = ['owner', 'hid', 'keyv', 'keys', 'serverKeys', 'oldkey', 'oldkey_until', 'secrets', 'recovery', 'recoverySaved', 'ha'];
 
 /**
  * DATA_DIR/keys.json (0600, written atomically and synchronously): everything secret the server
@@ -409,86 +409,6 @@ export function makeHouse(R) {
     if (c.ha) K.ha = c.ha;
   }
 
-  const crash = (point) => {
-    if (process.env.RESTOCK_TEST_CRASH === point) {
-      R.log('RESTOCK_TEST_CRASH: stopping ' + point);
-      process.exit(70);
-    }
-  };
-
-  /** The handover's commit (section 7, step 5): (a) keys, (b) household.db, (c) mode, (d) done. */
-  async function commitHandover(c, sender) {
-    // (a)
-    takeKeys(c);
-    K.handoverPending = true;
-    keys.save();
-    crash('after-keys');
-    // (b): every sync file and archive, read as a new device, then the server's own changes.
-    S.house = { name: c.name, home: R.cfg.homeUrl || S.house?.home || '', away: R.cfg.awayUrl || null, created: new Date(now()).toISOString(), seeded: true };
-    R.web?.joinHouse(null);
-    await R.openDb({ fresh: true, name: c.name, ownerPub: c.ownerPub });
-    R.mergeEverything({ first: 'restock-sync-' + sender + '.bin' });
-    const e = R.engine;
-    // The household's own tabs and receipts stay as they were while any member is still on 0.9.3
-    // (it follows them, so widening now would make it share Keg, Pharmacy or receipts): widen().
-    S.house.narrow = { since: new Date(now()).toISOString() };
-    e.db.transaction(() => {
-      e.writeHousehold('owner', me());
-      signMember(me(), SERVER_MEMBER_NAME, K.owner.pub);
-      e.writeHousehold('server', serverRowValue());
-      if (e.householdValue('hid') === null) e.writeHousehold('hid', K.hid);
-      for (const r of e.db.query("SELECT k FROM household WHERE k LIKE 'handover:%'")) e.writeHousehold(String(r.k), null);
-      resealRecovery();
-    });
-    if (K.ha) R.ha.tookOver(c.ha?.state);
-    crash('after-db');
-    // (c): every v2 phone stays, with api 2 (they upgrade with POST /api/v3/upgrade).
-    for (const [id, d] of Object.entries(S.devices)) {
-      // A phone the household removed while it was a phone household: on the server, never in the house.
-      if (e.householdValue('removed:' + id) !== null && (d.status ?? 'active') === 'active') {
-        d.status = 'removed';
-        d.statusAt = now();
-      }
-      if (!d.status) {
-        d.status = 'active';
-        d.statusAt = now();
-      }
-      if (!d.api) d.api = 2;
-      if (!d.label) d.label = memberRowName(d) ?? d.name;
-    }
-    S.mode = 'v3';
-    await R.st.save();
-    crash('after-mode');
-    // (d)
-    finishHandover();
-  }
-  function memberRowName(d) {
-    for (const [id, x] of Object.entries(S.devices)) if (x === d) return memberRow(id)?.name ?? null;
-    return null;
-  }
-  function finishHandover() {
-    delete K.handoverPending;
-    keys.save();
-    R.writeOwn();
-    R.moveActivity();
-    R.note('handover-done', { name: S.house?.name });
-  }
-
-  /** On start: a handover that stopped part-way is rolled back (before the mode changed) or finished. */
-  async function recoverHandover() {
-    if (!K.handoverPending) return null;
-    if (S.mode !== 'v3') {
-      keys.clearHouse();
-      R.closeDb();
-      for (const f of ['household.db', 'household.db-wal', 'household.db-shm']) rmSync(join(R.DATA, f), { force: true });
-      R.note('handover-rolled-back', {});
-      return 'rolled-back';
-    }
-    await R.openDb({});
-    finishHandover();
-    return 'finished';
-  }
-
   /** A bring (section 7): a phone household replaces the server's empty house. */
   async function bring(c, device) {
     const name = S.house?.name || c.name;
@@ -560,8 +480,6 @@ export function makeHouse(R) {
     remove,
     leave,
     checkPayload,
-    commitHandover,
-    recoverHandover,
     bring,
     refreshServerRow,
     resealRecovery,

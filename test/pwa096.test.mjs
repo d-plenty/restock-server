@@ -15,27 +15,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const built = process.env.RESTOCK_WEB_BUILT ? resolve(process.env.RESTOCK_WEB_BUILT) : resolve(here, '..', 'public', 'app');
 const restockDir = resolve(process.env.RESTOCK_DIR ? resolve(here, '..', process.env.RESTOCK_DIR) : resolve(here, '..', '..'));
 const has = existsSync(join(built, 'sw.js'));
-const shellOf = () => JSON.parse(JSON.parse(readFileSync(join(built, 'sw.js'), 'utf8').match(/("\{\\"build\\".*?\]\}")/)[1]));
 
 describe('0.9.6 (0.18.3: the server page): the home screen web app and its layout', () => {
-  test('the app shell is versioned and has every file the screens need offline', { skip: !has && 'no web build here' }, () => {
-    const shell = shellOf();
-    const pkg = join(restockDir, 'package.json');
-    if (existsSync(pkg)) assert.equal(shell.version, JSON.parse(readFileSync(pkg, 'utf8')).version, 'the shell names the release');
-    assert.match(shell.build, /^[0-9a-z]{7,}$/);
-    const files = new Set(shell.files);
-    // Every script, style sheet and wasm of the build (but the text reader, the QR maker and, 0.10.7, the shop map).
+  test("the build is the server's own page: no copy of the household and no photo reader", { skip: !has && 'no web build here' }, () => {
     const assets = readdirSync(join(built, 'assets'));
-    for (const f of assets) {
-      if (!/\.(js|css|wasm)$/.test(f) || /tesseract|traineddata|worker\.min|zxing_writer|ppocrv5|ort-wasm|ocrWorker|maplibre-gl/i.test(f)) continue;
-      assert.ok(files.has(`assets/${f}`), `assets/${f} is kept for offline`);
-    }
-    // 0.18.3: the server's own page: no copy of the household (no database engine) and no photo reader.
-    assert.ok(!assets.some((f) => /sql-wasm|ppocrv5|ort-wasm|tesseract/.test(f)), 'none of the app screens');
-    // The page's own scripts and styles.
+    assert.ok(!assets.some((f) => /sql-wasm|ppocrv5|ort-wasm|tesseract|maplibre/.test(f)), 'none of the app screens');
     const html = readFileSync(join(built, 'index.html'), 'utf8');
-    for (const m of html.matchAll(/(?:src|href)="\/?(assets\/[^"]+)"/g)) assert.ok(files.has(m[1]), `${m[1]} from the page`);
-    assert.ok(!shell.files.some((f) => f.startsWith('api/') || f.startsWith('setup/')));
+    for (const m of html.matchAll(/(?:src|href)="\/?(assets\/[^"]+)"/g)) assert.ok(existsSync(join(built, m[1])), `${m[1]} from the page`);
   });
 
   test('the page keeps clear of the notch and home bar', { skip: !has && 'no web build here' }, () => {

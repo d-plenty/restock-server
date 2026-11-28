@@ -14,7 +14,6 @@ import { validZone } from '../zone.mjs';
 import { existsSync } from 'node:fs';
 import { makeHa } from './ha.mjs';
 import { makeData } from './data.mjs';
-import { makeSearch } from './search.mjs';
 import { backupStream } from './backup.mjs';
 import { parseNameV3, canWriteV3, canReadV3, bodyOkV3, reservedDevice, DEVICE } from '../names.mjs';
 import { checkPassphrase } from '../../public/setup/strength.js';
@@ -76,7 +75,6 @@ export async function makeV3(R) {
   R.zone = () => (S.settings?.timeZone && validZone(S.settings.timeZone) ? S.settings.timeZone : R.cfg.timeZone);
   R.ha = makeHa(R);
   R.data = makeData(R);
-  R.search = makeSearch(R);
   R.openDb = (o) => R.merger.openDb(o);
   R.closeDb = () => R.merger.closeDb();
   R.writeOwn = () => {
@@ -92,7 +90,6 @@ export async function makeV3(R) {
   const joinNonces = new Map(); // n -> at
 
   // ---------- on start ----------
-  const recovered = await house.recoverHandover();
   if (S.mode === 'v3' || S.mode === 'released') {
     if (!R.engine) await R.openDb({});
     // 0.18.3: an http:// away address (or a home one that isn't at home) learnt from a tunnel before 0.18.3, put right.
@@ -110,7 +107,6 @@ export async function makeV3(R) {
     R.writeOwn();
     if (K.ha?.enabled) ha.start();
   }
-  if (recovered) R.log('Restock server: a handover that stopped part-way was ' + (recovered === 'finished' ? 'finished.' : 'rolled back (the owner phone can try again).'));
 
   const timers = [
     setInterval(() => {
@@ -319,7 +315,6 @@ export async function makeV3(R) {
       name: S.house.name,
       keepMonths: house.keepMonths(),
       autoDelete: house.keepMonths(),
-      webSearch: R.search.enabled(),
       home: house.home() || null,
       away: house.away() || null,
       homeFixed: !!R.cfg.homeUrl,
@@ -339,6 +334,22 @@ export async function makeV3(R) {
       qrSignIn: S.settings?.qrSignIn !== false,
     };
   }
+  /** Does this address answer, and as this server? Five seconds, no redirects followed, a small answer only. */
+  async function answersAsThis(url) {
+    const stop = new AbortController();
+    const t = setTimeout(() => stop.abort(), 5000);
+    try {
+      const r = await fetch(url + '/api/v3/health', { redirect: 'manual', cache: 'no-store', signal: stop.signal });
+      if (r.status !== 200 || Number(r.headers.get('content-length') ?? 0) > 4096) return false;
+      const j = JSON.parse((await r.text()).slice(0, 4096));
+      return j?.app === 'restock-server' && (!S.house || j.house === S.house.name);
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
   /** Checks the 0.18.3 settings in a PUT before anything changes; returns what to change. */
   function checkMoreSettings(b) {
     const out = {};
@@ -683,8 +694,6 @@ export async function makeV3(R) {
       return R.send(req, res, 200, { ok: true, mode: S.mode, house: { name } });
     }
 
-    // 0.15.0: the handover of a 0.9.3 household (v2) is gone (restock-server 0.14.1 still does it).
-
     // ---------- phones joining ----------
     if (path === '/api/v3/join' && method === 'POST') {
       needMode('v3');
@@ -692,11 +701,6 @@ export async function makeV3(R) {
       const told = String(req.headers['x-restock-app'] ?? '').trim().slice(0, 40);
       if (tooOldHere(told)) throw new HttpError(403, core.OLD_APP_ERROR, oldHereWords(), { min: minApp(), version: told });
       return R.send(req, res, 200, await joinPhone(R.json(body), ip));
-    }
-    if (path === '/api/v3/upgrade' && method === 'POST') {
-      needMode('v3');
-      needPhone(actor, false);
-      return R.send(req, res, 200, upgrade(actor, R.json(body)));
     }
     if ((m = /^\/api\/v3\/devices\/([^/]+)$/.exec(path)) && method === 'DELETE') {
       needMode('v3');
@@ -883,6 +887,21 @@ export async function makeV3(R) {
     // ---------- settings ----------
     // 0.18.3: Data from an admin phone too (Server admin in the app), and its risky changes need a yes on a phone (needSure).
     const dataCtx = () => ({ req, res, ip, url, path, method, actor, body, input, needWeb: (a, k) => needAdminWeb(a, req, k), needConfirm: needSure, sealedAnswer });
+    // 0.19.0: "Test both" on Addresses asks the server (the page's own rules only let it talk to
+    // the address it was opened with, so its own test said "didn't answer" for every other one).
+    if (path === '/api/v3/addresses/test' && method === 'POST') {
+      needAdminWeb(actor, req);
+      const b = input();
+      const out = {};
+      await Promise.all(
+        ['home', 'away'].map(async (where) => {
+          if (b[where] === undefined || b[where] === null || b[where] === '') return;
+          const c = cleanAddress(b[where], where, R.isHomeAddress);
+          out[where] = c.value ? await answersAsThis(c.value) : false;
+        }),
+      );
+      return sealedAnswer(actor, 200, out, req, res);
+    }
     if (path === '/api/v3/settings') {
       if (method === 'GET') {
         needAdminWeb(actor, req);
@@ -901,8 +920,6 @@ export async function makeV3(R) {
           if (b.keepMonths !== null && typeof b.keepMonths !== 'number') throw new HttpError(400, 'keepMonths', 'Auto delete after 1 to 120 months, or off.');
           R.data.autoDeleteGate(dataCtx(), b, b.keepMonths);
         }
-        // 0.9.5: "Let the web page search the shops" (search.mjs), on or off.
-        if (b.webSearch !== undefined && typeof b.webSearch !== 'boolean') throw new HttpError(400, 'webSearch', 'Turn Let the web page search the shops on or off.');
         if (b.name !== undefined) {
           const name = cleanName(b.name);
           if (!name) throw new HttpError(400, 'name', 'Give the house a name.');
@@ -916,12 +933,9 @@ export async function makeV3(R) {
           house.refreshServerRow();
         }
         applyMoreSettings(more, actor);
-        const searchWas = R.search.enabled();
-        if (b.webSearch !== undefined) R.search.setEnabled(b.webSearch);
         await R.st.save();
         R.writeOwn();
         R.note('settings-changed', { by: actor.by, keepMonths: house.keepMonths() });
-        if (R.search.enabled() !== searchWas) R.note(R.search.enabled() ? 'web-search-on' : 'web-search-off', { by: actor.by });
         if (prune) {
           const cut = house.cutoff(now());
           if (cut) await merger.pruneTo(cut);
@@ -963,15 +977,6 @@ export async function makeV3(R) {
       await R.st.save();
       R.note('user-name-changed', { by: actor.by, was });
       return sealedAnswer(actor, 200, { user }, req, res);
-    }
-    // ---------- 0.9.5: Let the web page search the shops (search.mjs) ----------
-    if (path === '/api/v3/search' && method === 'POST') {
-      needWeb(actor);
-      return sealedAnswer(actor, 200, await R.search.search(actor, input()), req, res);
-    }
-    if (path === '/api/v3/search/add' && method === 'POST') {
-      needWeb(actor);
-      return sealedAnswer(actor, 200, R.search.add(actor, input()), req, res);
     }
     if (path === '/api/v3/prune' && method === 'POST') {
       needWeb(actor, 'passphrase');
@@ -1180,24 +1185,6 @@ export async function makeV3(R) {
       return sealedAnswer(actor, 200, r.ok ? { ok: true, came: r.came, went: r.went, held: !!r.held } : { ok: false, message: r.message }, req, res);
     }
 
-    // ---------- history, stats, specials ----------
-    if (path === '/api/v3/history' && method === 'GET') {
-      needWeb(actor);
-      const product = String(url.searchParams.get('product') ?? '');
-      if (!product || product.length > 200) throw new HttpError(400, 'product', 'Which product?');
-      const from = url.searchParams.get('from');
-      return sealedAnswer(actor, 200, { prices: merger.history(product, from && from.length <= 40 ? from : null) }, req, res);
-    }
-    if (path === '/api/v3/stats' && method === 'GET') {
-      needWeb(actor);
-      const months = Math.min(60, Math.max(1, Math.trunc(Number(url.searchParams.get('months')) || 12)));
-      return sealedAnswer(actor, 200, { months: merger.stats(months) }, req, res);
-    }
-    if (path === '/api/v3/specials' && method === 'GET') {
-      needWeb(actor);
-      return sealedAnswer(actor, 200, merger.specials(), req, res);
-    }
-
     // ---------- 0.9.5: the Data tab (data.mjs) ----------
     if (path.startsWith('/api/v3/data/')) return R.data.api(dataCtx());
 
@@ -1293,69 +1280,6 @@ export async function makeV3(R) {
     R.writeOwn();
     R.note('phone-joined', { by: device, label: inv.label, how: b.bring !== undefined ? 'bring' : 'invite' });
     return { sealed: house.sealGift(device, kex, n, house.joinGift(device, inv.label, seed, secret)) };
-  }
-
-  /** POST /api/v3/upgrade: a phone already here before the handover (signed with its v2 key). */
-  function upgrade(actor, b) {
-    const kex = p256Str(b.kex);
-    const n = nOf(b.n);
-    if (!kex) throw new HttpError(400, 'kex', "The phone's kex key isn't a P-256 public key.");
-    if (!n) throw new HttpError(400, 'n', 'n must be 16 random bytes.');
-    const myPub = b.myPub === undefined || b.myPub === null ? null : p256Str(b.myPub);
-    if (b.myPub && !myPub) throw new HttpError(400, 'myPub', "The phone's household key isn't a P-256 public key.");
-    const device = actor.device;
-    const d = actor.dev;
-    // Being on the server isn't being in the household: a phone the household removed (it kept its
-    // server registration) or one that was never in it gets no keys (SyncHousehold's own rule).
-    if (R.engine.householdValue('removed:' + device) !== null) {
-      d.status = 'removed';
-      d.statusAt = now();
-      R.st.saveSoon();
-      R.note('upgrade-refused', { by: device, why: 'removed from the household' });
-      throw new HttpError(401, 'removed', 'This phone was removed from the household.');
-    }
-    const row = house.memberRow(device);
-    if (!row) {
-      R.note('upgrade-refused', { by: device, why: 'not in the household' });
-      throw new HttpError(403, 'member', "This phone isn't in the household on the server. Add it on the server's Add a phone page instead.");
-    }
-    const label = cleanName(d.label ?? row?.name ?? d.name) || 'Phone';
-    d.label = label;
-    d.kex = kex;
-    if (myPub) d.myPub = myPub;
-    d.api = 3;
-    d.status = 'active';
-    if (!K.secrets) K.secrets = {};
-    if (!K.secrets[device]) K.secrets[device] = b64u(randomBytes(32));
-    R.keys.save();
-    const pubForRow = myPub ?? row?.pub ?? null;
-    if (!row || row.name !== label || (pubForRow && row.pub !== pubForRow)) house.signMember(device, label, pubForRow);
-    house.resealRecovery();
-    // Home Assistant from this phone (sealed to the server), only while the server doesn't run it, and
-    // only from the phone the household says runs it (ha:phone): any other member could otherwise
-    // point the server's requests (and its token) wherever it liked.
-    let haTaken = false;
-    const haOffered = typeof b.ha === 'string' && !(K.ha?.enabled && K.ha?.token);
-    if (haOffered && ha.haPhone() !== device) R.note('home-assistant-refused', { by: device, why: 'not the Home Assistant phone' });
-    else if (haOffered) {
-      try {
-        const p = core.openHa(core.haKey(house.kexPriv(), core.unb64(kex), n), device, core.unb64(b.ha));
-        const clean = ha.cleanPayload(p);
-        if (clean) {
-          K.ha = { address: clean.address, entity: clean.entity, enabled: clean.enabled, token: clean.token };
-          R.keys.save();
-          ha.tookOver(clean.state);
-          if (K.ha.enabled) ha.start();
-          haTaken = true;
-        }
-      } catch {
-        R.note('home-assistant-refused', { by: device });
-      }
-    }
-    R.st.saveSoon();
-    R.writeOwn();
-    R.note('phone-upgraded', { by: device, label, ...(haTaken ? { homeAssistant: true } : {}) });
-    return { sealed: house.sealGift(device, kex, n, house.joinGift(device, label, false, K.secrets[device])), ...(haTaken ? { ha: true } : {}) };
   }
 
   // ---------- starting afresh (after the household was taken back) ----------

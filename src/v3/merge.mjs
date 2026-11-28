@@ -681,58 +681,7 @@ export function makeMerger(R) {
     writeOwn();
   }
 
-  // ---------- reading for the web: history, stats, specials ----------
-
-  function history(product, from) {
-    const rows = from
-      ? raw.prepare('SELECT product_id, date, price, was_price, is_special, member_only, promo, source FROM prices WHERE product_id = ? AND date >= ? ORDER BY date').all(product, from)
-      : raw.prepare('SELECT product_id, date, price, was_price, is_special, member_only, promo, source FROM prices WHERE product_id = ? ORDER BY date').all(product);
-    return rows.map((r) => ({ ...r }));
-  }
-
-  function stats(months) {
-    const from = new Date(now());
-    from.setUTCDate(1);
-    from.setUTCHours(0, 0, 0, 0);
-    from.setUTCMonth(from.getUTCMonth() - (months - 1));
-    const since = from.toISOString();
-    const out = new Map();
-    const row = (m) => {
-      if (!out.has(m)) out.set(m, { month: m, receipts: {}, receiptCount: 0, productsTracked: 0, specialsSeen: 0 });
-      return out.get(m);
-    };
-    for (let d = new Date(from); d.getTime() <= now(); d.setUTCMonth(d.getUTCMonth() + 1)) row(d.toISOString().slice(0, 7));
-    for (const r of raw.prepare("SELECT substr(COALESCE(receipt_date, scanned_at), 1, 7) AS m, section, COUNT(*) AS n, COALESCE(SUM(total), 0) AS total FROM receipts WHERE COALESCE(receipt_date, scanned_at) >= ? AND id NOT LIKE 'demo-%' GROUP BY m, section").all(since)) {
-      if (!out.has(r.m)) continue;
-      const x = row(r.m);
-      x.receipts[r.section] = Math.round(Number(r.total) * 100) / 100;
-      x.receiptCount += Number(r.n);
-    }
-    for (const r of raw.prepare("SELECT substr(date, 1, 7) AS m, COUNT(DISTINCT product_id) AS products, COUNT(DISTINCT CASE WHEN is_special = 1 THEN product_id END) AS specials FROM prices WHERE date >= ? AND source <> 'demo' GROUP BY m").all(since)) {
-      if (!out.has(r.m)) continue;
-      const x = row(r.m);
-      x.productsTracked = Number(r.products);
-      x.specialsSeen = Number(r.specials);
-    }
-    return [...out.values()].sort((a, b) => a.month.localeCompare(b.month));
-  }
-
-  function specials() {
-    const from = iso(now() - SPECIALS_DAYS * DAY);
-    const rows = raw
-      .prepare(
-        `SELECT p.product_id, p.date, p.price, p.was_price, p.promo, p.member_only, pr.chain, pr.name, pr.brand, pr.size, pr.image_url
-         FROM prices p JOIN products pr ON pr.id = p.product_id
-         WHERE p.is_special = 1 AND p.date >= ? AND p.date = (SELECT MAX(q.date) FROM prices q WHERE q.product_id = p.product_id)
-         ORDER BY p.date DESC LIMIT 2000`,
-      )
-      .all(from)
-      .map((r) => ({ ...r }));
-    const extra = specialsOut();
-    return { specials: rows, lists: extra.specials?.lists ?? [], catalogues: extra.catalogues ?? {} };
-  }
-
-  return { openDb, closeDb, logLine, readLog, moveActivity, queue, settle, mergeEverything, writeOwn, pruneTo, daily, dropStaleWebFiles, history, stats, specials, raw: () => raw };
+  return { openDb, closeDb, logLine, readLog, moveActivity, queue, settle, mergeEverything, writeOwn, pruneTo, daily, dropStaleWebFiles, raw: () => raw };
 }
 
 /** File names under files/ (for the merge and retention), from a directory walk. */
