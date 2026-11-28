@@ -1,8 +1,8 @@
 # Restock server
 
-Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock and keeps your household's history. Its web page (and **Server admin** on an admin phone) looks after the phones, the data and the server's settings.
+Your household's own server for [Restock](https://github.com/d-plenty/Restock), the local-first price tracker for Australian supermarkets, bottle shops and chemists. Run it at home on a NAS, a home server, an old laptop, a Raspberry Pi or inside Home Assistant. Your phones sync through it at home and away. It runs your shopping list with Home Assistant around the clock and keeps your household's history. Its web page looks after the phones, the data and the server's settings (and **Server admin** on an admin phone does the basics on the go). It can also keep each phone's backup, so a lost phone can be put back.
 
-**Works with Restock 0.14.0 to 0.18.3** on your phones (Android, iPhone and iPad).
+**Works with Restock 0.14.0 to 0.18.4** on your phones (Android, iPhone and iPad).
 
 > **Update every phone to Restock 0.14.0 or newer first.** From server 0.15.0, a phone on an older version is turned away with "Update Restock on this phone to 0.14.0 or newer to keep syncing". It keeps everything it has and works on its own until it's updated. The server's **Phones and admins** page lists any phone that needs updating. A server that still keeps a household from Restock 0.9.2 or 0.9.3 has [one step first](#already-using-the-server-with-restock-093).
 
@@ -25,6 +25,7 @@ The pictures on this page use sample data.
 3. [Add your phones](#3-add-your-phones)
 - [The web page](#the-web-page): Phones and admins, Data, and Server settings
 - [A yes on an admin phone](#a-yes-on-an-admin-phone)
+- [Phone backups](#phone-backups): each phone's backup, and putting a lost one back
 - [Data](#data): what's here, exports, [deleting](#deleting-data) and [how long it's kept](#how-long-data-is-kept)
 - [What each phone shares](#what-each-phone-shares)
 - [Home Assistant](#home-assistant)
@@ -143,13 +144,13 @@ Each phone is a **user** or an **admin**. Phones start as users. On **Phones and
 
 Since 0.18.1, every change asks **Are you sure?** first (adding a phone, removing one, Make admin and Make user), on the phone and here. The server's only admin phone is warned before it makes itself a user or leaves. An admin phone gets a **notification** when a phone joins, leaves or is removed, or becomes an admin or a user (its Settings → Notifications, on to start with), and **Activity → Admin actions** here shows just what admins did.
 
-**From 0.18.3,** an admin phone has **Server admin** (Settings → Sync → Restock server): the phones and tablets, **Sign in a computer** (scan the code on the sign-in page), Data and how long it's kept, Activity, and Server settings (the household, the addresses, signing in, the recovery key with the passphrase, Home Assistant on or off, and updates). It's also where an admin phone says yes to sign-ins and risky changes. **The last admin phone** can't be removed or made a user, from the phone or the web page: make another phone an admin first.
+**From 0.18.4,** an admin phone has **Server admin** (Settings → Sync → Restock server), with what's wanted on the go, a page each: **Phones and tablets** (add, remove, make admin or user, rename), **Sign in a computer** (scan the code on the sign-in page), **Passphrase** (change it: the phone proves the current one, and every browser is signed out), **Basic settings** (the household's name, the addresses, Home Assistant on or off) and **Phone backups**. A browser waiting for a yes shows at the top. Everything else is on the web page. **The last admin phone** can't be removed or made a user, from the phone or the web page: make another phone an admin first.
 
 ## The web page
 
 From 0.18.3 the web page looks after the server, and nothing else: the shopping list, the pantry and the shops are on the phones. It's small (about 1.7 MB), keeps nothing of the household in the browser, and the first time it opens in a browser it deletes the copy the page before kept there. The sidebar has:
 
-- **Phones and admins:** every phone and tablet, Add a phone or tablet, Make admin and Make user, Rename and Remove, and **Activity** (Everything, or just Admin actions).
+- **Phones and admins:** every phone and tablet, Add a phone or tablet (or one that replaces a lost phone), Make admin and Make user, Rename and Remove, each phone's backup ([phone backups](#phone-backups)), and **Activity** (Everything, or just Admin actions).
 - **Data:** see [Data](#data).
 - **Server settings**, a page each:
   - **Household:** its name, the time zone (for Activity and the nightly tidy-up), and the oldest Restock that can join.
@@ -161,7 +162,7 @@ From 0.18.3 the web page looks after the server, and nothing else: the shopping 
 
 <p align="center"><img src="docs/screenshots/web-security-0183.png" alt="Server settings → Sign-in and security: the passphrase, user name and recovery key, scanning with a phone, a yes on an admin phone, sign out after, and the signed-in browsers" width="720"></p>
 
-Changes save as they're made; Addresses has its own Save. It works on a phone-sized screen too, and on an iPhone's home screen (Share → Add to Home Screen).
+Changes save as they're made; Addresses has its own Save. It fits any screen, from a phone (each table row becomes a card) to a big monitor, and works on an iPhone's home screen (Share → Add to Home Screen). This browser → Text size makes the whole page bigger or smaller.
 
 ## A yes on an admin phone
 
@@ -174,6 +175,16 @@ Like two-factor: **signing in with the passphrase**, and each **risky change** o
 <p align="center"><img src="docs/screenshots/web-yes-0183.png" alt="Say yes on an admin phone: a two-digit number, which phone was asked, the time left, Cancel, and Use the recovery key" width="360"></p>
 
 A phone can't be woken for it (iPhones don't let apps check in the background, and Android only every 15 minutes), so the phone asks when Restock is opened, and every few seconds while it's open. **Every admin phone lost?** The page's **Use the recovery key** says yes in its place. Until an admin phone is on Restock 0.18.3, the passphrase alone signs in, as before, so updating the server first doesn't shut anyone out. Scanning the sign-in code with an admin phone needs no second step.
+
+## Phone backups
+
+**New in 0.18.4.** Each phone and tablet can keep its whole backup on the server: its settings, look, shops, every tab (shared or not), cards and receipts (not their photos). So when a phone is lost or broken, a new one gets everything back.
+
+- **Turn them on once,** with the passphrase: **Phones and admins → Phone backups → Turn on**, or **Server admin → Phone backups** on an admin phone. That makes the household's backup key; its private half is locked with the passphrase.
+- **Then each phone backs up once a day** while Restock is open on it (on unless turned off on that phone, in Settings → Sync → Restock server → Backup, which also has **Back up now**). Each phone's latest one is kept, as `backups/<device>.bin`.
+- **The server can't read them:** each is sealed to the backup key, and only the passphrase opens that. Anyone with the passphrase can, so keep it as private as the server.
+- **Putting a lost phone back:** **Add a phone or tablet** and pick it under **Replaces a lost or broken phone**. The new phone joins with that code (as an admin if the lost one was), Restock asks for the server's passphrase, and everything comes back: settings, look, shops, cards and receipts replace the new phone's; items and prices are added to what the household's sync brought; the shopping list is the household's as it is now. The lost phone then comes off the server.
+- **Downloading one:** **Backup…** on a phone, then the passphrase (and a yes on an admin phone). It's saved as a Restock backup file (locked with a password if you give one, where the browser can) that opens in **Import data** on any phone.
 
 ## Data
 
@@ -194,7 +205,7 @@ Nothing here deletes your shopping list, your pantry, the newest price of each p
 
 ### How long data is kept
 
-**How long data is kept** (on Data, and in Server admin on an admin phone) deletes data older than you choose, every night at about 3 am (in the server's time zone): **3, 6 or 12 months, 2 years, or until deleted**. It covers prices, receipts and their photos, the phones' moved-off history (`archive/`), statistics and logs, with the same things kept as above.
+**How long data is kept** (on Data) deletes data older than you choose, every night at about 3 am (in the server's time zone): **3, 6 or 12 months, 2 years, or until deleted**. It covers prices, receipts and their photos, the phones' moved-off history (`archive/`), statistics and logs, with the same things kept as above.
 
 - **Off is the start** on a new server: nothing is deleted until you delete it.
 - **A server updated from 0.9.4 keeps its setting** (12 months unless you changed it).
@@ -366,7 +377,7 @@ If your phones already share a household over Wi-Fi or a cloud drive folder: on 
 
 **In a household on the server (0.9.4 and newer),** the server can read what phones share with it: the shopping lists and pantry, Bottle shop and Chemist if shared, receipts and their photos if shared, prices including years of history, what's been ticked off (for spending), the household record, each phone's settings summary, the Home Assistant token, and the activity log and logs. It needs to, to merge, keep history and statistics, run Home Assistant and show the web app. Loyalty card numbers are blanked before they reach its database (a phone that shares cards still puts them in its sealed file, which the server can open).
 
-**It never has:** anything a phone doesn't share, your passphrase, or the phones' private keys.
+**It never has:** anything a phone doesn't share, your passphrase, or the phones' private keys. A phone's [backup](#phone-backups) (0.18.4) is sealed to a key only the passphrase opens: the server keeps it, but can't read it.
 
 **It never talks to the shops.** (Before 0.18.3, *Let the web page search the shops* could; that went with the web page's shopping screens.) Once a day it asks GitHub for the newest version number, unless that's turned off.
 

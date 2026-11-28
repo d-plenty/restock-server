@@ -244,7 +244,7 @@ export async function makeV3(R) {
    * An admin phone asking for itself proves the passphrase (it is the phone). `what` is needConfirm's;
    * APPROVE_OF maps it to the request's kind (no kind: the passphrase alone, as before).
    */
-  const APPROVE_OF = { 'auto-delete': 'keep-data', 'keep-data': 'keep-data', 'delete-data': 'delete-data', prune: 'delete-data', 'delete-everything': 'delete-everything', 'recovery-key': 'recovery-key', passphrase: 'passphrase', 'user-name': 'user-name', move: 'move', erase: 'erase' };
+  const APPROVE_OF = { 'phone-backup': 'phone-backup', 'backup-key': 'backup-key', 'auto-delete': 'keep-data', 'keep-data': 'keep-data', 'delete-data': 'delete-data', prune: 'delete-data', 'delete-everything': 'delete-everything', 'recovery-key': 'recovery-key', passphrase: 'passphrase', 'user-name': 'user-name', move: 'move', erase: 'erase' };
   function needSure(actor, b, ip, what) {
     const kind = APPROVE_OF[what];
     if (actor?.type === 'web3' && kind && b && typeof b.approved === 'string') {
@@ -430,6 +430,23 @@ export async function makeV3(R) {
     return b.length === 16 ? b : null;
   };
   const p256Str = (s) => (typeof s === 'string' && s.length <= 200 && R.p256Key(s) ? s : null);
+  /** 0.18.4: the backup key's private half, sealed with the passphrase (RSK1 + nonce + GCM), base64url. */
+  const cleanSealedKey = (s) => {
+    if (typeof s !== 'string' || s.length > 300 || !/^[A-Za-z0-9_-]+$/.test(s)) return null;
+    const bytes = Buffer.from(s, 'base64url');
+    return bytes.length >= 4 + 12 + 16 + 32 && bytes.subarray(0, 4).toString('latin1') === 'RSK1' ? s : null;
+  };
+  /** 0.18.4: each phone's backup on the server: device -> { at, size }. */
+  async function backupFiles() {
+    const out = new Map();
+    for (const f of await R.walk()) {
+      const p = parseNameV3(f.name);
+      if (p?.kind === 'backup') out.set(p.owner, { at: f.modified ?? null, size: f.size ?? 0 });
+    }
+    return out;
+  }
+  /** 0.18.4: one-off downloads of a phone's backup for the web page (two minutes, once). */
+  const backupTokens = new Map();
 
   /**
    * Without RESTOCK_HOME_URL / RESTOCK_AWAY_URL, and until an admin sets the addresses (Server settings
@@ -717,7 +734,8 @@ export async function makeV3(R) {
       if (actor.type === 'phone') needPhone(actor);
       const files = (await R.walk()).filter((f) => {
         const p = parseNameV3(f.name);
-        return p && canReadV3(actor, p);
+        // 0.18.4: phone backups aren't part of syncing: read by name (backups/<device>.bin).
+        return p && p.kind !== 'backup' && canReadV3(actor, p);
       });
       return sealedAnswer(actor, 200, { files }, req, res);
     }
@@ -756,6 +774,7 @@ export async function makeV3(R) {
     // ---------- Server and phones ----------
     if (path === '/api/v3/phones' && method === 'GET') {
       needManager(actor, req, false);
+      const backups = await backupFiles();
       const phones = Object.entries(S.devices)
         .map(([device, d]) => {
           const sum = summaryOf(device);
@@ -773,6 +792,8 @@ export async function makeV3(R) {
             shares: R.engine.sharesOf(device),
             api: d.api ?? 2,
             role: d.role === 'admin' ? 'admin' : 'user',
+            // 0.18.4: its latest backup on the server (backups/<device>.bin), if it keeps one.
+            backup: backups.get(device) ?? null,
             ...(actor.type === 'phone' && device === actor.device ? { me: true } : {}),
           };
         })
@@ -786,7 +807,15 @@ export async function makeV3(R) {
       const label = cleanName(b.label);
       if (!label) throw new HttpError(400, 'label', 'Give the phone a name, like "Sarah\'s phone".');
       // 0.18.0: a code for an admin: the passphrase on the web page, or an admin phone.
-      const role = b.admin === true ? 'admin' : 'user';
+      // 0.18.4: a code that replaces a lost phone: the new one takes its place (its role, and its backup to restore).
+      let replaces = null;
+      if (b.replaces !== undefined && b.replaces !== null) {
+        const old = typeof b.replaces === 'string' && DEVICE.test(b.replaces) ? S.devices[b.replaces] : null;
+        if (!old || (old.status ?? 'active') !== 'active') throw new HttpError(404, 'not-found', "That phone isn't on this server.");
+        if (actor.type === 'phone' && b.replaces === actor.device) throw new HttpError(400, 'replaces', "A phone can't make a code to replace itself.");
+        replaces = b.replaces;
+      }
+      const role = replaces ? (S.devices[replaces].role === 'admin' ? 'admin' : 'user') : b.admin === true ? 'admin' : 'user';
       if (role === 'admin') needAdmin(actor, req);
       for (const [k, v] of invites) if (v.expires + V3_LIMITS.inviteKeptMs < now()) invites.delete(k);
       if ([...invites.values()].filter((v) => !v.used && v.expires >= now()).length >= V3_LIMITS.maxInvites) throw new HttpError(429, 'busy', 'Too many codes waiting. Use one or wait 10 minutes.');
@@ -795,13 +824,13 @@ export async function makeV3(R) {
       // 0.18.3: a code that goes in a locked export file (Export data → Connections, from an admin
       // phone) lasts a day: the file may be opened on the new phone later. Still once only.
       const life = b.forExport === true ? 24 * 60 * MIN : V3_LIMITS.inviteMs;
-      invites.set(b64u(R.sha256(Buffer.from(invite))), { expires: now() + life, used: false, label, role, ...(b.forExport === true ? { forExport: true } : {}) });
+      invites.set(b64u(R.sha256(Buffer.from(invite))), { expires: now() + life, used: false, label, role, ...(b.forExport === true ? { forExport: true } : {}), ...(replaces ? { replaces } : {}) });
       const p = new URLSearchParams();
       if (house.home()) p.set('h', house.home());
       if (house.away()) p.set('a', house.away());
       p.set('i', invite);
       p.set('k', house.kexPub());
-      R.note('invite-made', { by: actor.by, label, ...(role === 'admin' ? { role } : {}) });
+      R.note('invite-made', { by: actor.by, label, ...(role === 'admin' ? { role } : {}), ...(replaces ? { replaces } : {}) });
       return sealedAnswer(actor, 200, { code: 'restock-server:3?' + p.toString(), expires: iso(now() + life), expiresIn: life / 1000, label, role, home: house.home(), away: house.away() }, req, res);
     }
     if ((m = /^\/api\/v3\/phones\/([^/]+)$/.exec(path)) && (method === 'PATCH' || method === 'DELETE')) {
@@ -957,18 +986,110 @@ export async function makeV3(R) {
       return sealedAnswer(actor, 200, out, req, res);
     }
 
+    // ---------- 0.18.4: each phone's backup ----------
+    // A phone keeps its whole backup here (backups/<device>.bin, through /files), sealed to the
+    // household's backup key: a P-256 key whose private half is sealed with a key from the passphrase,
+    // so the server can't open them. Restoring (the web page's Download, or a new phone that replaces
+    // a lost one) needs the passphrase.
+    if (path === '/api/v3/backupkey' && method === 'GET') {
+      if (!actor) throw new HttpError(401, 'auth', 'Sign in first.');
+      const k = S.backupKey ?? null;
+      if (actor.type === 'phone') {
+        needPhone(actor);
+        const full = actor.dev.role === 'admin' || !!actor.dev.restoreFrom;
+        return sealedAnswer(actor, 200, k ? { pub: k.pub, at: k.at, ...(full ? { sealed: k.sealed, salt: S.account?.salt ?? null } : {}) } : {}, req, res);
+      }
+      needWeb(actor, 'passphrase');
+      return sealedAnswer(actor, 200, k ? { pub: k.pub, at: k.at, sealed: k.sealed } : {}, req, res);
+    }
+    if (path === '/api/v3/backupkey' && method === 'PUT') {
+      if (actor?.type === 'phone') needAdminWeb(actor, req, 'passphrase');
+      else needWeb(actor, 'passphrase');
+      const b = input();
+      const pub = p256Str(b.pub);
+      const sealed = cleanSealedKey(b.sealed);
+      if (!pub || !sealed) throw new HttpError(400, 'bad-request', "That isn't a backup key.");
+      if (S.backupKey && b.replace !== true) throw new HttpError(409, 'backup-key', 'Phone backups are already on.');
+      needSure(actor, b, ip, 'backup-key');
+      S.backupKey = { pub, sealed, at: iso(now()) };
+      await R.st.save();
+      R.note('phone-backups-on', { by: actor.by });
+      return sealedAnswer(actor, 200, { pub, at: S.backupKey.at }, req, res);
+    }
+    if (path === '/api/v3/restore' && method === 'GET') {
+      needPhone(actor);
+      const from = actor.dev.restoreFrom;
+      if (!from) return sealedAnswer(actor, 200, {}, req, res);
+      const old = S.devices[from];
+      const backup = (await backupFiles()).get(from) ?? null;
+      const k = S.backupKey;
+      return sealedAnswer(
+        actor,
+        200,
+        { from, label: old ? (old.label ?? house.memberRow(from)?.name ?? old.name ?? null) : null, backup, ...(k ? { key: { pub: k.pub, sealed: k.sealed, salt: S.account?.salt ?? null } } : {}) },
+        req,
+        res,
+      );
+    }
+    if (path === '/api/v3/restore' && method === 'POST') {
+      needPhone(actor);
+      const from = actor.dev.restoreFrom;
+      if (!from) throw new HttpError(409, 'restore', 'This phone has nothing to restore.');
+      const b = input();
+      delete actor.dev.restoreFrom;
+      const old = S.devices[from];
+      // Taking the lost phone off gives the household a new key: the answer is sealed with the one this phone asked with.
+      const askedWith = K.keyv;
+      // Restored (not skipped): the lost phone is taken off, as Remove does.
+      if (b.skip !== true && old && (old.status ?? 'active') === 'active' && from !== actor.device) {
+        house.remove(from);
+        web.endPhoneSessions(from);
+        R.endV2PhoneSessions(from);
+        R.forgetNonces(from);
+        R.note('phone-removed', { by: actor.by, device: from, name: old.label ?? old.name, why: 'replaced' });
+      }
+      await R.st.save();
+      return sealedAnswer(actor, 200, { ok: true, keyv: Number(K.keyv) }, req, res, askedWith);
+    }
+    if ((m = /^\/api\/v3\/phone-backup\/([A-Za-z0-9_-]{1,64})$/.exec(path))) {
+      needWeb(actor, 'passphrase');
+      const name = `backups/${m[1]}.bin`;
+      if (method === 'POST') {
+        const b = input();
+        if (!(await backupFiles()).has(m[1])) throw new HttpError(404, 'not-found', "That phone hasn't kept a backup here.");
+        needSure(actor, b, ip, 'phone-backup');
+        const token = b64u(randomBytes(24));
+        for (const [k, v] of backupTokens) if (v.until < now()) backupTokens.delete(k);
+        backupTokens.set(token, { device: m[1], hash: actor.hash, until: now() + 2 * MIN });
+        R.note('phone-backup-downloaded', { by: actor.by, device: m[1] });
+        return sealedAnswer(actor, 200, { token, key: S.backupKey ? { sealed: S.backupKey.sealed } : null }, req, res);
+      }
+      if (method === 'GET') {
+        const t = backupTokens.get(String(url.searchParams.get('t') ?? ''));
+        if (!t || t.until < now() || t.device !== m[1] || t.hash !== actor.hash) throw new HttpError(403, 'token', 'That download has run out. Try again.');
+        backupTokens.delete(String(url.searchParams.get('t')));
+        return R.serveFile(req, res, actor, name);
+      }
+      throw new HttpError(405, 'method', 'Not allowed.');
+    }
+
     // ---------- the passphrase, the recovery key, the backup ----------
     if (path === '/api/v3/passphrase' && method === 'POST') {
-      needWeb(actor, 'passphrase');
+      // 0.18.4: an admin phone can change it too (Server admin → Passphrase): it proves the current one
+      // over its own id, and being an admin phone is the yes.
+      const fromPhone = actor?.type === 'phone';
+      if (fromPhone) needAdminWeb(actor, req, 'passphrase');
+      else needWeb(actor, 'passphrase');
       R.checkLock(ip);
       const b = input({ sealedOnly: true });
       const a = S.account;
+      if (!a?.loginKey) throw new HttpError(409, 'no-passphrase', 'This server has no passphrase yet. Set it up on the web page.');
       // 0.18.3: then a yes on an admin phone; sent again with `approved` (and the same new passphrase).
-      const approved = typeof b.approved === 'string' && R.approvals.take(b.approved, actor.hash, 'passphrase');
-      if (typeof b.approved === 'string' && !approved) throw new HttpError(403, 'approve-expired', 'That yes from the phone has run out. Try again.');
+      const approved = !fromPhone && typeof b.approved === 'string' && R.approvals.take(b.approved, actor.hash, 'passphrase');
+      if (!fromPhone && typeof b.approved === 'string' && !approved) throw new HttpError(403, 'approve-expired', 'That yes from the phone has run out. Try again.');
       if (!approved) {
         const okC = web.useChallenge(b.c);
-        const want = core.loginProof(Buffer.from(a.loginKey, 'base64url'), String(b.c ?? ''), actor.sid);
+        const want = core.loginProof(Buffer.from(a.loginKey, 'base64url'), String(b.c ?? ''), fromPhone ? 'phone:' + actor.device : actor.sid);
         if (!okC || !R.same(String(b.proof ?? ''), want)) {
           R.failed(ip, 'passphrase');
           R.note('passphrase-change-refused', { by: actor.by, ip: R.mask(ip) });
@@ -979,10 +1100,16 @@ export async function makeV3(R) {
       if (!salt || salt.length < 16 || salt.length > 32) throw new HttpError(400, 'bad-request', 'The salt must be 16-32 random bytes.');
       const auth = typeof b.auth === 'string' ? Buffer.from(b.auth, 'base64url') : null;
       if (!auth || auth.length !== 32) throw new HttpError(400, 'bad-request', 'The auth key must be 32 bytes.');
-      if (!approved && R.approvals.needed()) throw new HttpError(403, 'approve', 'Say yes on an admin phone.', { approve: R.approvals.start('passphrase', actor.hash, actor.session, R.mask(ip)) });
+      if (!fromPhone && !approved && R.approvals.needed()) throw new HttpError(403, 'approve', 'Say yes on an admin phone.', { approve: R.approvals.start('passphrase', actor.hash, actor.session, R.mask(ip)) });
+      // 0.18.4: the phone backups' key, sealed with the new passphrase (the page or phone opened it with the old one).
+      if (S.backupKey) {
+        const sealed = cleanSealedKey(b.backupSealed);
+        if (!sealed) throw new HttpError(400, 'backup-key', "The phone backups' key has to come too. Reload the page (or update Restock on this phone) and try again.");
+        S.backupKey = { ...S.backupKey, sealed, at: iso(now()) };
+      }
       await R.setPassphrase(b.salt, auth);
-      // Everyone else is signed out; this browser carries on.
-      for (const k of Object.keys(S.sessions3)) if (k !== actor.hash) delete S.sessions3[k];
+      // Everyone else is signed out; this browser carries on (from a phone: every browser is signed out).
+      for (const k of Object.keys(S.sessions3)) if (fromPhone || k !== actor.hash) delete S.sessions3[k];
       R.endV2Sessions();
       await R.st.save();
       R.note('passphrase-changed', { by: actor.by });
@@ -1160,6 +1287,8 @@ export async function makeV3(R) {
     const secret = house.admit(device, { name, pub, kex, myPub, label: inv.label });
     // 0.18.0: an admin's code makes an admin; any other code, a user.
     if (inv.role === 'admin') S.devices[device].role = 'admin';
+    // 0.18.4: replacing a lost phone: this one may read its backup (and takes it off once restored).
+    if (inv.replaces && S.devices[inv.replaces] && inv.replaces !== device) S.devices[device].restoreFrom = inv.replaces;
     await R.st.save();
     R.writeOwn();
     R.note('phone-joined', { by: device, label: inv.label, how: b.bring !== undefined ? 'bring' : 'invite' });

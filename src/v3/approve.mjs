@@ -36,6 +36,9 @@ export const WHAT = {
   'user-name': 'change the user name',
   move: 'move the household to a new server',
   erase: 'erase this server',
+  // 0.18.4
+  'phone-backup': "download a phone's backup",
+  'backup-key': 'turn on phone backups',
 };
 
 export function makeApprovals(R) {

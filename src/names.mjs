@@ -63,6 +63,8 @@ export function bodyOk(parsed, body) {
 // server's own file: nobody else writes it.
 
 const KEYSFILE = /^keys\/([A-Za-z0-9_-]{1,64})\.bin$/;
+/** 0.18.4: backups/<device>.bin, a phone's whole backup, sealed to the household's backup key (RSB1). */
+const BACKUP = /^backups\/([A-Za-z0-9_-]{1,64})\.bin$/;
 
 /** { name, kind, owner } for a name a v3 server allows, or null. kind: sync | archive | photo | keysfile. */
 export function parseNameV3(name) {
@@ -73,11 +75,12 @@ export function parseNameV3(name) {
   if ((m = ARCHIVE.exec(name))) return { name, kind: 'archive', owner: m[1] };
   if ((m = PHOTO.exec(name))) return { name, kind: 'photo', owner: null };
   if ((m = KEYSFILE.exec(name))) return { name, kind: 'keysfile', owner: m[1] };
+  if ((m = BACKUP.exec(name))) return { name, kind: 'backup', owner: m[1] };
   return null;
 }
 
 /** Folders a v3 server lists (v2's, and keys/). */
-export const FOLDERS_V3 = ['archive', 'photos', 'keys'];
+export const FOLDERS_V3 = ['archive', 'photos', 'keys', 'backups'];
 
 /** Device ids a phone can't have on a v3 server: the server's own, browsers', and the keys file's prefix. */
 export const reservedDevice = (d) => /^(srv|web|keys)-/i.test(String(d ?? ''));
@@ -92,7 +95,7 @@ export function canWriteV3(actor, parsed) {
   if (parsed.kind === 'keysfile') return false;
   if (actor.type === 'web3' || actor.type === 'web') return parsed.kind === 'sync' && !!actor.webDevice && parsed.owner === actor.webDevice;
   if (actor.type === 'phone') {
-    if (parsed.kind === 'sync' || parsed.kind === 'archive') return parsed.owner === actor.device && !reservedDevice(actor.device);
+    if (parsed.kind === 'sync' || parsed.kind === 'archive' || parsed.kind === 'backup') return parsed.owner === actor.device && !reservedDevice(actor.device);
     return parsed.kind === 'photo';
   }
   return false;
@@ -102,11 +105,14 @@ export function canWriteV3(actor, parsed) {
 export function canReadV3(actor, parsed) {
   if (!actor || !parsed) return false;
   if (parsed.kind === 'keysfile') return actor.type === 'phone' && parsed.owner === actor.device;
+  // 0.18.4: a phone's backup: that phone, or the phone that replaces it (an Add a phone code that
+  // replaces it, until it's restored). The web page downloads one through /api/v3/phone-backup.
+  if (parsed.kind === 'backup') return actor.type === 'phone' && (parsed.owner === actor.device || actor.dev?.restoreFrom === parsed.owner);
   return true;
 }
 
 /** A v3 body: RSF1 for every .bin a phone or browser writes (the server writes keys/ itself). */
 export function bodyOkV3(parsed, body) {
   if (body.length < 32) return false;
-  return body.subarray(0, 4).toString('latin1') === (parsed.kind === 'keysfile' ? 'RSE3' : 'RSF1');
+  return body.subarray(0, 4).toString('latin1') === (parsed.kind === 'keysfile' ? 'RSE3' : parsed.kind === 'backup' ? 'RSB1' : 'RSF1');
 }
